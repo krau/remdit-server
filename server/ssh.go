@@ -3,11 +3,13 @@ package server
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
 	"remdit-server/config"
 
+	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -31,7 +33,7 @@ func (s *SSHServer) HandleConn(conn net.Conn) {
 
 	for newChan := range chans {
 		if newChan.ChannelType() != "session" {
-			newChan.Reject(ssh.UnknownChannelType, "unsupported channel type")
+			newChan.Reject(ssh.UnknownChannelType, "only session channels are supported")
 			continue
 		}
 		channel, requests, err := newChan.Accept()
@@ -45,11 +47,40 @@ func (s *SSHServer) HandleConn(conn net.Conn) {
 			for req := range in {
 				switch req.Type {
 				case "shell":
-					if err := req.Reply(true, nil); err != nil {
-						slog.Error("failed to reply to shell request", "err", err)
-						return
+					req.Reply(true, nil)
+					fmt.Fprint(channel, "Successfully connected to the SSH server.\n")
+
+					return
+				case "subsystem":
+					var payload struct {
+						Name string
 					}
-					// [TODO] main logic here
+					if err := ssh.Unmarshal(req.Payload, &payload); err != nil {
+						slog.Error("failed to unmarshal subsystem request", "err", err)
+						req.Reply(false, nil)
+						continue
+					}
+					if payload.Name != "sftp" {
+						req.Reply(false, nil)
+						continue
+					}
+
+					req.Reply(true, nil)
+
+					handler := NewTempFileHandler()
+					defer handler.Clean()
+					sftpHandlers := sftp.Handlers{FileGet: handler, FilePut: handler, FileCmd: handler, FileList: handler}
+
+					requestServer := sftp.NewRequestServer(channel, sftpHandlers)
+
+					slog.Info("starting SFTP server for client")
+
+					if err := requestServer.Serve(); err != nil {
+						if err != io.EOF {
+							slog.Error("SFTP server error", "err", err)
+						}
+					}
+					slog.Info("SFTP server session ended")
 
 					return
 				default:
@@ -79,7 +110,7 @@ func Serve(ctx context.Context) error {
 	}
 	sshConf.AddHostKey(signer)
 
-	addr := fmt.Sprintf(":%d", config.C.SSHPort)
+	addr := fmt.Sprintf("%s:%d", config.C.SSHHost, config.C.SSHPort)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("failed to listen on %s: %w", addr, err)

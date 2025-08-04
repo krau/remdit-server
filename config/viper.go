@@ -11,6 +11,7 @@ import (
 type Config struct {
 	SSHPrivateKeyPath string `toml:"ssh_private_key_path" mapstructure:"ssh_private_key_path"`
 	SSHPort           int    `toml:"ssh_port" mapstructure:"ssh_port"`
+	SSHHost           string `toml:"ssh_host" mapstructure:"ssh_host"`
 }
 
 var C *Config

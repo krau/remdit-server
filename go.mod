@@ -8,11 +8,15 @@ require (
 	golang.org/x/crypto v0.40.0
 )
 
+require github.com/kr/fs v0.1.0 // indirect
+
 require (
 	github.com/fsnotify/fsnotify v1.8.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.2.1 // indirect
+	github.com/google/uuid v1.6.0
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.3 // indirect
+	github.com/pkg/sftp v1.13.9
 	github.com/sagikazarmark/locafero v0.7.0 // indirect
 	github.com/sourcegraph/conc v0.3.0 // indirect
 	github.com/spf13/afero v1.12.0 // indirect
