@@ -9,6 +9,7 @@ import (
 	"os"
 	"remdit-server/config"
 
+	"github.com/google/uuid"
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 )
@@ -16,13 +17,6 @@ import (
 type SSHServer struct {
 	conf *ssh.ServerConfig
 }
-
-type SessionStat uint
-
-const (
-	SessionStatNone SessionStat = iota
-	SessionStatFileInfo
-)
 
 func (s *SSHServer) HandleConn(conn net.Conn) {
 	defer conn.Close()
@@ -32,14 +26,27 @@ func (s *SSHServer) HandleConn(conn net.Conn) {
 		slog.Error("failed to create SSH server connection", "err", err)
 		return
 	}
+	defer sshConn.Close()
 	slog.Info(
 		"SSH connection established",
 		"remote_addr", sshConn.RemoteAddr(),
 		"user", sshConn.User(),
 	)
-	go ssh.DiscardRequests(reqs)
 
-	var sessionStat SessionStat
+	fileID := uuid.New()
+
+	go func(in <-chan *ssh.Request) {
+		for req := range in {
+			switch req.Type {
+			case "file-id":
+				req.Reply(true, []byte(fileID.String()))
+			default:
+				if req.WantReply {
+					req.Reply(false, nil)
+				}
+			}
+		}
+	}(reqs)
 
 	for newChan := range chans {
 		if newChan.ChannelType() != "session" {
@@ -56,30 +63,7 @@ func (s *SSHServer) HandleConn(conn net.Conn) {
 			defer channel.Close()
 			for req := range in {
 				switch req.Type {
-				case "file-info":
-					if sessionStat != SessionStatNone {
-						slog.Warn("file-info request received in unexpected state", "state", sessionStat)
-						return
-					}
-					var payload FileInfoPayload
-					if err := ssh.Unmarshal(req.Payload, &payload); err != nil {
-						slog.Error("failed to unmarshal file-info request", "err", err)
-						req.Reply(false, nil)
-						return
-					}
-					slog.Info("file-info request received", "file_name", payload.FileName, "file_size", payload.FileSize)
-					if payload.FileSize > 10*1024*1024 { // 10 MB limit
-						slog.Warn("file size exceeds limit", "file_size", payload.FileSize)
-						req.Reply(false, nil)
-						continue
-					}
-					sessionStat = SessionStatFileInfo
-					req.Reply(true, nil)
 				case "subsystem":
-					if sessionStat != SessionStatFileInfo {
-						slog.Warn("subsystem request received in unexpected state", "state", sessionStat)
-						return
-					}
 					var payload struct {
 						Name string
 					}
@@ -95,7 +79,7 @@ func (s *SSHServer) HandleConn(conn net.Conn) {
 
 					req.Reply(true, nil)
 
-					handler := NewTempFileHandler()
+					handler := NewTempFileHandler(fileID.String())
 					defer handler.Close()
 					sftpHandlers := sftp.Handlers{FileGet: handler, FilePut: handler, FileCmd: handler, FileList: handler}
 
@@ -109,7 +93,6 @@ func (s *SSHServer) HandleConn(conn net.Conn) {
 						}
 					}
 					slog.Info("SFTP server session ended", "remote_addr", sshConn.RemoteAddr(), "user", sshConn.User())
-
 					return
 				default:
 					if req.WantReply {

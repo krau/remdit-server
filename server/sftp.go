@@ -8,8 +8,11 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/google/uuid"
 	"github.com/pkg/sftp"
+)
+
+const (
+	maxUploadSize = 10 * 1024 * 1024 // 10 MB
 )
 
 type TempFileHandler struct {
@@ -19,6 +22,19 @@ type TempFileHandler struct {
 	uploaded bool
 }
 
+// NewTempFileHandler creates a handler with a unique temp directory
+func NewTempFileHandler(id string) *TempFileHandler {
+	tempDir := filepath.Join("remdit-uploads", id)
+	if err := os.MkdirAll(tempDir, 0755); err != nil {
+		slog.Error("failed to create temp directory", "dir", tempDir, "err", err)
+	}
+	return &TempFileHandler{
+		randomID: id,
+		tempDir:  tempDir,
+	}
+}
+
+// Close cleans up the temp directory
 func (h *TempFileHandler) Close() error {
 	if err := os.RemoveAll(h.tempDir); err != nil {
 		slog.Error("failed to clean temp directory", "dir", h.tempDir, "err", err)
@@ -28,16 +44,7 @@ func (h *TempFileHandler) Close() error {
 	return nil
 }
 
-func NewTempFileHandler() *TempFileHandler {
-	randomID := uuid.New().String()
-	tempDir := filepath.Join("remdit-uploads", randomID)
-	os.MkdirAll(tempDir, 0755)
-	return &TempFileHandler{
-		randomID: randomID,
-		tempDir:  tempDir,
-	}
-}
-
+// Fileread only succeeds if the file has been uploaded
 func (h *TempFileHandler) Fileread(r *sftp.Request) (io.ReaderAt, error) {
 	if !h.uploaded {
 		return nil, errors.New("file not uploaded yet")
@@ -52,13 +59,16 @@ func (h *TempFileHandler) Fileread(r *sftp.Request) (io.ReaderAt, error) {
 	return f, nil
 }
 
+// Filewrite allows a single file upload, with size and name checks
 func (h *TempFileHandler) Filewrite(r *sftp.Request) (io.WriterAt, error) {
+	// Reject if already uploaded
 	if h.uploaded {
 		return nil, errors.New("file already uploaded")
 	}
+
 	slog.Debug("SFTP write request", "path", r.Filepath)
-	fileName := filepath.Base(r.Filepath)
-	h.fileName = fileName
+	// Assign filename and create directories
+	h.fileName = filepath.Base(r.Filepath)
 	fullPath := filepath.Join(h.tempDir, h.fileName)
 	dir := filepath.Dir(fullPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -73,13 +83,37 @@ func (h *TempFileHandler) Filewrite(r *sftp.Request) (io.WriterAt, error) {
 	}
 
 	slog.Info("created temp file for client upload", "temp_path", fullPath)
-	return file, nil
+
+	// Wrap writer to enforce max size per write
+	writer := &limitedWriterAt{File: file}
+
+	// Mark as uploaded to prevent another Filewrite
+	h.uploaded = true
+	return writer, nil
 }
 
+// Filecmd rejects unsupported commands
 func (h *TempFileHandler) Filecmd(r *sftp.Request) error {
 	return fmt.Errorf("unsupported command: %s", r.Method)
 }
 
+// Filelist rejects directory listing
 func (h *TempFileHandler) Filelist(r *sftp.Request) (sftp.ListerAt, error) {
 	return nil, fmt.Errorf("unsupported list method: %s", r.Method)
+}
+
+// limitedWriterAt enforces max upload size per write and cumulative
+// based on file offset and length
+
+type limitedWriterAt struct {
+	*os.File
+}
+
+func (w *limitedWriterAt) WriteAt(p []byte, off int64) (int, error) {
+	end := off + int64(len(p))
+	if end > maxUploadSize {
+		slog.Warn("upload size exceeds limit", "offset", off, "length", len(p))
+		return 0, fmt.Errorf("upload exceeds max size of %d bytes", maxUploadSize)
+	}
+	return w.File.WriteAt(p, off)
 }
