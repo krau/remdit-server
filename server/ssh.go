@@ -15,8 +15,17 @@ import (
 )
 
 type SSHServer struct {
-	conf *ssh.ServerConfig
+	conf         *ssh.ServerConfig
+	fileInfoStor FileInfoStorage
 }
+
+type SessionState uint
+
+const (
+	SessionStateNone SessionState = iota
+	SessionStateFileUpload
+	SessionStateFileInfo
+)
 
 func (s *SSHServer) HandleConn(conn net.Conn) {
 	defer conn.Close()
@@ -32,14 +41,42 @@ func (s *SSHServer) HandleConn(conn net.Conn) {
 		"remote_addr", sshConn.RemoteAddr(),
 		"user", sshConn.User(),
 	)
-
+	var sessionState SessionState = SessionStateNone
 	fileID := uuid.New()
+
+	fileInfo := FileInfoPayload{
+		FileID:    fileID.String(),
+		EditUrl:   fmt.Sprintf("https://%s/edit/%s", config.C.SSHHost, fileID.String()), // [TODO]
+		EditToken: "example-token",                                                      // [TODO]
+	}
+	if err := s.fileInfoStor.Save(context.Background(), fileID.String(), fileInfo); err != nil {
+		slog.Error("failed to save file info", "err", err)
+		return
+	}
+	defer func() {
+		if err := s.fileInfoStor.Delete(context.Background(), fileID.String()); err != nil {
+			slog.Error("failed to delete file info", "err", err)
+		}
+	}()
 
 	go func(in <-chan *ssh.Request) {
 		for req := range in {
 			switch req.Type {
-			case "file-id":
-				req.Reply(true, []byte(fileID.String()))
+			case "file-info":
+				if sessionState != SessionStateFileUpload {
+					slog.Warn("file-info request received in wrong state", "state", sessionState)
+					req.Reply(false, nil)
+					continue
+				}
+
+				payload := s.fileInfoStor.Get(context.Background(), fileID.String())
+				if payload == nil {
+					slog.Error("file info not found", "fileID", fileID.String())
+					req.Reply(false, nil)
+					continue
+				}
+				req.Reply(true, payload.Marshal())
+				sessionState = SessionStateFileInfo
 			default:
 				if req.WantReply {
 					req.Reply(false, nil)
@@ -53,6 +90,10 @@ func (s *SSHServer) HandleConn(conn net.Conn) {
 			newChan.Reject(ssh.UnknownChannelType, "only session channels are supported")
 			continue
 		}
+		if sessionState != SessionStateNone {
+			newChan.Reject(ssh.Prohibited, "session already in progress")
+			continue
+		}
 		channel, requests, err := newChan.Accept()
 		if err != nil {
 			slog.Error("failed to accept channel", "err", err)
@@ -64,6 +105,10 @@ func (s *SSHServer) HandleConn(conn net.Conn) {
 			for req := range in {
 				switch req.Type {
 				case "subsystem":
+					if sessionState != SessionStateNone {
+						req.Reply(false, nil)
+						continue
+					}
 					var payload struct {
 						Name string
 					}
@@ -93,6 +138,7 @@ func (s *SSHServer) HandleConn(conn net.Conn) {
 						}
 					}
 					slog.Info("SFTP server session ended", "remote_addr", sshConn.RemoteAddr(), "user", sshConn.User())
+					sessionState = SessionStateFileUpload
 					return
 				default:
 					if req.WantReply {
@@ -128,7 +174,7 @@ func Serve(ctx context.Context) error {
 	}
 	slog.Info("SSH server listening on", "addr", addr)
 
-	server := &SSHServer{conf: sshConf}
+	server := &SSHServer{conf: sshConf, fileInfoStor: NewFileInfoMemoryStorage()}
 
 	go func() {
 		for {
