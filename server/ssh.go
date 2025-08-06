@@ -17,6 +17,13 @@ type SSHServer struct {
 	conf *ssh.ServerConfig
 }
 
+type SessionStat uint
+
+const (
+	SessionStatNone SessionStat = iota
+	SessionStatFileInfo
+)
+
 func (s *SSHServer) HandleConn(conn net.Conn) {
 	defer conn.Close()
 
@@ -25,11 +32,14 @@ func (s *SSHServer) HandleConn(conn net.Conn) {
 		slog.Error("failed to create SSH server connection", "err", err)
 		return
 	}
-	slog.Info("SSH connection established",
+	slog.Info(
+		"SSH connection established",
 		"remote_addr", sshConn.RemoteAddr(),
 		"user", sshConn.User(),
 	)
 	go ssh.DiscardRequests(reqs)
+
+	var sessionStat SessionStat
 
 	for newChan := range chans {
 		if newChan.ChannelType() != "session" {
@@ -46,46 +56,64 @@ func (s *SSHServer) HandleConn(conn net.Conn) {
 			defer channel.Close()
 			for req := range in {
 				switch req.Type {
-				case "shell":
+				case "file-info":
+					if sessionStat != SessionStatNone {
+						slog.Warn("file-info request received in unexpected state", "state", sessionStat)
+						return
+					}
+					var payload FileInfoPayload
+					if err := ssh.Unmarshal(req.Payload, &payload); err != nil {
+						slog.Error("failed to unmarshal file-info request", "err", err)
+						req.Reply(false, nil)
+						return
+					}
+					slog.Info("file-info request received", "file_name", payload.FileName, "file_size", payload.FileSize)
+					if payload.FileSize > 10*1024*1024 { // 10 MB limit
+						slog.Warn("file size exceeds limit", "file_size", payload.FileSize)
+						req.Reply(false, nil)
+						continue
+					}
+					sessionStat = SessionStatFileInfo
 					req.Reply(true, nil)
-					fmt.Fprint(channel, "Successfully connected to the SSH server.\n")
-
-					return
 				case "subsystem":
+					if sessionStat != SessionStatFileInfo {
+						slog.Warn("subsystem request received in unexpected state", "state", sessionStat)
+						return
+					}
 					var payload struct {
 						Name string
 					}
 					if err := ssh.Unmarshal(req.Payload, &payload); err != nil {
 						slog.Error("failed to unmarshal subsystem request", "err", err)
 						req.Reply(false, nil)
-						continue
+						return
 					}
 					if payload.Name != "sftp" {
 						req.Reply(false, nil)
-						continue
+						return
 					}
 
 					req.Reply(true, nil)
 
 					handler := NewTempFileHandler()
-					defer handler.Clean()
+					defer handler.Close()
 					sftpHandlers := sftp.Handlers{FileGet: handler, FilePut: handler, FileCmd: handler, FileList: handler}
 
 					requestServer := sftp.NewRequestServer(channel, sftpHandlers)
 
-					slog.Info("starting SFTP server for client")
+					slog.Info("starting SFTP server for client", "remote_addr", sshConn.RemoteAddr(), "user", sshConn.User())
 
 					if err := requestServer.Serve(); err != nil {
 						if err != io.EOF {
 							slog.Error("SFTP server error", "err", err)
 						}
 					}
-					slog.Info("SFTP server session ended")
+					slog.Info("SFTP server session ended", "remote_addr", sshConn.RemoteAddr(), "user", sshConn.User())
 
 					return
 				default:
 					if req.WantReply {
-						req.Reply(true, nil)
+						req.Reply(false, nil)
 					}
 				}
 			}
@@ -96,9 +124,9 @@ func (s *SSHServer) HandleConn(conn net.Conn) {
 func Serve(ctx context.Context) error {
 	sshConf := &ssh.ServerConfig{
 		PublicKeyCallback: func(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
-			// Do nothing
 			return nil, nil
 		},
+		PublicKeyAuthAlgorithms: []string{ssh.KeyAlgoED25519},
 	}
 	priKey, err := os.ReadFile(config.C.SSHPrivateKeyPath)
 	if err != nil {
