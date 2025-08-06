@@ -22,12 +22,20 @@ type TempFileHandler struct {
 	uploaded bool
 }
 
+func (h *TempFileHandler) WriteFile(b []byte) error {
+	if !h.uploaded {
+		return errors.New("file not uploaded yet")
+	}
+	fullPath := filepath.Join(h.tempDir, h.fileName)
+	if err := os.WriteFile(fullPath, b, 0644); err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+	return nil
+}
+
 // NewTempFileHandler creates a handler with a unique temp directory
 func NewTempFileHandler(id string) *TempFileHandler {
 	tempDir := filepath.Join("remdit-uploads", id)
-	if err := os.MkdirAll(tempDir, 0755); err != nil {
-		slog.Error("failed to create temp directory", "dir", tempDir, "err", err)
-	}
 	return &TempFileHandler{
 		randomID: id,
 		tempDir:  tempDir,
@@ -68,6 +76,9 @@ func (h *TempFileHandler) Filewrite(r *sftp.Request) (io.WriterAt, error) {
 
 	slog.Debug("SFTP write request", "path", r.Filepath)
 	// Assign filename and create directories
+	if err := os.MkdirAll(h.tempDir, 0755); err != nil {
+		slog.Error("failed to create temp directory", "dir", h.tempDir, "err", err)
+	}
 	h.fileName = filepath.Base(r.Filepath)
 	fullPath := filepath.Join(h.tempDir, h.fileName)
 	dir := filepath.Dir(fullPath)

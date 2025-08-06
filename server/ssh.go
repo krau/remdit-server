@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"remdit-server/config"
+	"remdit-server/service"
 
 	"github.com/google/uuid"
 	"github.com/pkg/sftp"
@@ -25,6 +26,7 @@ const (
 	SessionStateNone SessionState = iota
 	SessionStateFileUpload
 	SessionStateFileInfo
+	SessionStateListen
 )
 
 func (s *SSHServer) HandleConn(conn net.Conn) {
@@ -59,6 +61,9 @@ func (s *SSHServer) HandleConn(conn net.Conn) {
 		}
 	}()
 
+	handler := NewTempFileHandler(fileID.String())
+	defer handler.Close()
+
 	go func(in <-chan *ssh.Request) {
 		for req := range in {
 			switch req.Type {
@@ -77,6 +82,40 @@ func (s *SSHServer) HandleConn(conn net.Conn) {
 				}
 				req.Reply(true, payload.Marshal())
 				sessionState = SessionStateFileInfo
+			case "listen":
+				if sessionState != SessionStateFileInfo {
+					slog.Warn("listen request received in wrong state", "state", sessionState)
+					req.Reply(false, nil)
+					continue
+				}
+				req.Reply(true, nil)
+				sessionState = SessionStateListen
+
+				go service.SubscribeEvent(fileID.String(), func(eventData service.Event) {
+					if eventData.Err != nil {
+						slog.Error("event handler error", "fileID", eventData.FileID, "err", eventData.Err)
+						return
+					}
+					switch eventData.Type {
+					case "file-save":
+						fileContent, ok := eventData.Data.([]byte)
+						if !ok {
+							slog.Error("invalid data type for file-save event", "fileID", eventData.FileID)
+							return
+						}
+						if err := handler.WriteFile(fileContent); err != nil {
+							slog.Error("failed to write file", "fileID", eventData.FileID, "err", err)
+							return
+						}
+						ok, _, err := sshConn.SendRequest("file-save", true, fileContent)
+						if err != nil {
+							slog.Error("failed to send file-save request", "fileID", eventData.FileID, "err", err)
+							return
+						}
+					}
+				})
+
+				sessionState = SessionStateListen
 			default:
 				if req.WantReply {
 					req.Reply(false, nil)
@@ -124,10 +163,7 @@ func (s *SSHServer) HandleConn(conn net.Conn) {
 
 					req.Reply(true, nil)
 
-					handler := NewTempFileHandler(fileID.String())
-					defer handler.Close()
 					sftpHandlers := sftp.Handlers{FileGet: handler, FilePut: handler, FileCmd: handler, FileList: handler}
-
 					requestServer := sftp.NewRequestServer(channel, sftpHandlers)
 
 					slog.Info("starting SFTP server for client", "remote_addr", sshConn.RemoteAddr(), "user", sshConn.User())
@@ -148,6 +184,7 @@ func (s *SSHServer) HandleConn(conn net.Conn) {
 			}
 		}(requests)
 	}
+	slog.Info("SSH session ended", "remote_addr", sshConn.RemoteAddr(), "user", sshConn.User())
 }
 
 func Serve(ctx context.Context) error {
