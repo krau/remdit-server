@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"remdit-server/api"
 	"remdit-server/config"
 	"remdit-server/server"
 
@@ -19,7 +20,11 @@ var rootCmd = &cobra.Command{
 		config.InitConfig()
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return server.Serve(cmd.Context())
+		go api.Serve(cmd.Context())
+		if err := server.Serve(cmd.Context()); err != nil {
+			return err
+		}
+		return nil
 	},
 }
 
