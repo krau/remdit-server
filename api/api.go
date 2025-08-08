@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"remdit-server/config"
 	"remdit-server/service"
 	"time"
@@ -85,8 +86,7 @@ func Serve(ctx context.Context, stor service.FileInfoStorage) {
 			return
 		}
 		slog.Info("Saving file", "fileid", fileID, "content_length", len(fileSaveReq.Content))
-		// 保存文件
-		
+		// [TODO] 保存文件内容
 		ctx.JSON(http.StatusOK, gin.H{"status": "success", "fileid": fileID, "content_length": len(fileSaveReq.Content)})
 	})
 	router.GET("/file/:fileid", func(ctx *gin.Context) {
@@ -95,12 +95,19 @@ func Serve(ctx context.Context, stor service.FileInfoStorage) {
 			ctx.JSON(http.StatusBadRequest, gin.H{"error": "fileid is required"})
 			return
 		}
-		// [TODO] 获取文件内容
+		fileInfo := stor.Get(ctx, fileID)
+		if fileInfo == nil {
+			ctx.JSON(http.StatusNotFound, gin.H{"error": "file not found"})
+			return
+		}
 		slog.Info("Fetching file", "fileid", fileID)
-
-		// 模拟
-		fileContent := "This is a mock content for file " + fileID
-		ctx.JSON(http.StatusOK, gin.H{"fileid": fileID, "content": fileContent, "language": "plaintext"})
+		fileContent, err := os.ReadFile(fileInfo.Path())
+		if err != nil {
+			slog.Error("Failed to read file", "fileid", fileID, "err", err)
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read file"})
+			return
+		}
+		ctx.JSON(http.StatusOK, gin.H{"fileid": fileID, "content": string(fileContent), "language": "plaintext"})
 	})
 
 	serv := &http.Server{

@@ -86,34 +86,16 @@ func (s *SSHServer) HandleConn(conn net.Conn) {
 					req.Reply(false, nil)
 					continue
 				}
+				if err := s.fileInfoStor.Save(context.Background(), fileID.String(), handler); err != nil {
+					slog.Error("failed to save file info", "err", err)
+					req.Reply(false, nil)
+					return
+				}
 				req.Reply(true, nil)
 				sessionState = SessionStateListen
 
-				go service.SubscribeEvent(fileID.String(), func(eventData service.Event) {
-					if eventData.Err != nil {
-						slog.Error("event handler error", "fileID", eventData.FileID, "err", eventData.Err)
-						return
-					}
-					switch eventData.Type {
-					case "file-save":
-						fileContent, ok := eventData.Data.([]byte)
-						if !ok {
-							slog.Error("invalid data type for file-save event", "fileID", eventData.FileID)
-							return
-						}
-						if err := handler.WriteFile(fileContent); err != nil {
-							slog.Error("failed to write file", "fileID", eventData.FileID, "err", err)
-							return
-						}
-						ok, _, err := sshConn.SendRequest("file-save", true, fileContent)
-						if err != nil {
-							slog.Error("failed to send file-save request", "fileID", eventData.FileID, "err", err)
-							return
-						}
-					}
-				})
+				// [TODO] 监听 api 的事件并发送到客户端
 
-				sessionState = SessionStateListen
 			default:
 				if req.WantReply {
 					req.Reply(false, nil)
@@ -173,11 +155,6 @@ func (s *SSHServer) HandleConn(conn net.Conn) {
 					}
 					slog.Info("SFTP server session ended", "remote_addr", sshConn.RemoteAddr(), "user", sshConn.User())
 					sessionState = SessionStateFileUpload
-
-					if err := s.fileInfoStor.Save(context.Background(), fileID.String(), handler); err != nil {
-						slog.Error("failed to save file info", "err", err)
-						req.Reply(false, nil)
-					}
 
 					return
 				default:

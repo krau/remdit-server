@@ -8,21 +8,28 @@ type Event struct {
 	Type   string
 	FileID string
 	Data   any
-	Err    error
+}
+
+type EventFileSaveStatusData struct {
+	Ok  bool
+	Err string
 }
 
 var eventBus = eventbus.NewEventBus[Event]()
 
-func PublishEvent(eventType string, fileID string, data any, err error) {
+func PublishEvent(eventType string, fileID string, data any) {
 	event := Event{
 		Type:   eventType,
 		FileID: fileID,
 		Data:   data,
-		Err:    err,
 	}
 	eventBus.Publish(eventbus.Event[Event]{Topic: fileID, Payload: event})
 }
 
-func SubscribeEvent(fileID string, handler func(eventData Event)) {
-	eventBus.Subscribe(fileID, handler, true, 0, nil)
+func SubscribeEvent(fileID string, handler func(eventData Event), filter func(eventData Event) bool) {
+	eventBus.Subscribe(fileID, handler, false, 0, filter)
+}
+
+func UnsubscribeEvent(fileID string, handler func(eventData Event)) {
+	eventBus.Unsubscribe(fileID, handler)
 }

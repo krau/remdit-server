@@ -15,6 +15,7 @@ type FileInfo interface {
 	ID() string
 	Path() string
 	Name() string
+	WriteFile(b []byte) error
 }
 
 type FileInfoMemoryStorage struct {
