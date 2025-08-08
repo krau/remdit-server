@@ -20,11 +20,11 @@ var upgrader = websocket.Upgrader{
 
 type Hub struct {
 	mu      sync.Mutex
-	clients map[*websocket.Conn]bool
+	clients map[*websocket.Conn]struct{}
 }
 
 func newHub() *Hub {
-	return &Hub{clients: make(map[*websocket.Conn]bool)}
+	return &Hub{clients: make(map[*websocket.Conn]struct{})}
 }
 
 func (h *Hub) broadcast(sender *websocket.Conn, msg []byte) {
@@ -32,27 +32,66 @@ func (h *Hub) broadcast(sender *websocket.Conn, msg []byte) {
 	defer h.mu.Unlock()
 	for c := range h.clients {
 		if c != sender {
-			c.WriteMessage(websocket.BinaryMessage, msg)
+			go c.WriteMessage(websocket.BinaryMessage, msg)
 		}
 	}
 }
 
+func (h *Hub) isEmpty() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.clients) == 0
+}
+
+type HubManager struct {
+	hubs map[string]*Hub
+	mu   sync.Mutex
+}
+
+func (hm *HubManager) getHub(room string) *Hub {
+	hm.mu.Lock()
+	defer hm.mu.Unlock()
+	hub, exists := hm.hubs[room]
+	if !exists {
+		hub = newHub()
+		hm.hubs[room] = hub
+	}
+	return hub
+}
+
+func (hm *HubManager) cleanupHub(room string) {
+	hm.mu.Lock()
+	defer hm.mu.Unlock()
+	if hub, exists := hm.hubs[room]; exists && hub.isEmpty() {
+		delete(hm.hubs, room)
+		slog.Info("Cleaned up empty hub", "room", room)
+	}
+}
+
+func newHubManager() *HubManager {
+	return &HubManager{hubs: make(map[string]*Hub)}
+}
+
 func Serve(ctx context.Context) {
 	router := gin.Default()
-	hub := newHub()
 	corsConfig := cors.DefaultConfig()
 	corsConfig.AllowOrigins = []string{"*"}
 	router.Use(cors.New(corsConfig))
 
+	hubm := newHubManager()
 	router.GET("/ws/:room", func(ctx *gin.Context) {
+
 		conn, err := upgrader.Upgrade(ctx.Writer, ctx.Request, nil)
 		if err != nil {
 			return
 		}
 		defer conn.Close()
 
+		room := ctx.Param("room")
+		hub := hubm.getHub(room)
+		defer hubm.cleanupHub(room)
 		hub.mu.Lock()
-		hub.clients[conn] = true
+		hub.clients[conn] = struct{}{}
 		hub.mu.Unlock()
 
 		for {
@@ -65,10 +104,25 @@ func Serve(ctx context.Context) {
 			}
 			hub.broadcast(conn, msg)
 		}
-
 		hub.mu.Lock()
 		delete(hub.clients, conn)
 		hub.mu.Unlock()
+	})
+	router.POST("/save/:fileid", func(ctx *gin.Context) {
+		// file id 即为 ws 中的 room
+		fileID := ctx.Param("fileid")
+		if fileID == "" {
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": "fileid is required"})
+			return
+		}
+		fileContent := ctx.PostForm("content")
+		if fileContent == "" {
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": "content is required"})
+			return
+		}
+		// [TODO] 保存文件
+		slog.Info("Saving file", "fileid", fileID, "content_length", len(fileContent))
+		ctx.JSON(http.StatusOK, gin.H{"status": "success", "fileid": fileID, "content_length": len(fileContent)})
 	})
 
 	serv := &http.Server{
