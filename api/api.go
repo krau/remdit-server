@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"remdit-server/config"
-	"sync"
 	"time"
 
 	"github.com/gin-contrib/cors"
@@ -14,62 +13,8 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-var upgrader = websocket.Upgrader{
+var wsUpgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
-}
-
-type Hub struct {
-	mu      sync.Mutex
-	clients map[*websocket.Conn]struct{}
-}
-
-func newHub() *Hub {
-	return &Hub{clients: make(map[*websocket.Conn]struct{})}
-}
-
-func (h *Hub) broadcast(sender *websocket.Conn, msg []byte) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	for c := range h.clients {
-		if c != sender {
-			c.WriteMessage(websocket.BinaryMessage, msg)
-		}
-	}
-}
-
-func (h *Hub) isEmpty() bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return len(h.clients) == 0
-}
-
-type HubManager struct {
-	hubs map[string]*Hub
-	mu   sync.Mutex
-}
-
-func (hm *HubManager) getHub(room string) *Hub {
-	hm.mu.Lock()
-	defer hm.mu.Unlock()
-	hub, exists := hm.hubs[room]
-	if !exists {
-		hub = newHub()
-		hm.hubs[room] = hub
-	}
-	return hub
-}
-
-func (hm *HubManager) cleanupHub(room string) {
-	hm.mu.Lock()
-	defer hm.mu.Unlock()
-	if hub, exists := hm.hubs[room]; exists && hub.isEmpty() {
-		delete(hm.hubs, room)
-		slog.Info("Cleaned up empty hub", "room", room)
-	}
-}
-
-func newHubManager() *HubManager {
-	return &HubManager{hubs: make(map[string]*Hub)}
 }
 
 func Serve(ctx context.Context) {
@@ -78,38 +23,38 @@ func Serve(ctx context.Context) {
 	corsConfig.AllowOrigins = []string{"*"}
 	engine.Use(cors.New(corsConfig))
 
-	hubm := newHubManager()
 	router := engine.Group("/api")
-	router.GET("/ws/:room", func(ctx *gin.Context) {
 
-		conn, err := upgrader.Upgrade(ctx.Writer, ctx.Request, nil)
+	hubManager := NewHubManager()
+	router.GET("/socket/:room", func(ctx *gin.Context) {
+		room := ctx.Param("room")
+		if room == "" {
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": "room is required"})
+			return
+		}
+		conn, err := wsUpgrader.Upgrade(ctx.Writer, ctx.Request, nil)
 		if err != nil {
 			return
 		}
 		defer conn.Close()
-
-		room := ctx.Param("room")
-		hub := hubm.getHub(room)
-		defer hubm.cleanupHub(room)
-		hub.mu.Lock()
-		hub.clients[conn] = struct{}{}
-		hub.mu.Unlock()
+		hub := hubManager.GetHub(room)
+		defer hubManager.CleanupHub(room)
+		hub.AddClient(conn)
+		defer hub.RemoveClient(conn)
 
 		for {
 			mt, msg, err := conn.ReadMessage()
 			if err != nil {
+				slog.Error("Failed to read message", "err", err)
 				break
 			}
 			if mt != websocket.BinaryMessage {
 				continue
 			}
-			hub.broadcast(conn, msg)
+			hub.BroadcastMessage(msg)
 		}
-		hub.mu.Lock()
-		delete(hub.clients, conn)
-		hub.mu.Unlock()
 	})
-	router.POST("/file/:fileid", func(ctx *gin.Context) {
+	router.PUT("/file/:fileid", func(ctx *gin.Context) {
 		// file id 即为 ws 中的 room
 		fileID := ctx.Param("fileid")
 		if fileID == "" {
@@ -121,10 +66,9 @@ func Serve(ctx context.Context) {
 			ctx.JSON(http.StatusBadRequest, gin.H{"error": "content is required"})
 			return
 		}
-		fileContent := fileSaveReq.Content
 		// [TODO] 保存文件
-		slog.Info("Saving file", "fileid", fileID, "content_length", len(fileContent))
-		ctx.JSON(http.StatusOK, gin.H{"status": "success", "fileid": fileID, "content_length": len(fileContent)})
+		slog.Info("Saving file", "fileid", fileID, "content_length", len(fileSaveReq.Content))
+		ctx.JSON(http.StatusOK, gin.H{"status": "success", "fileid": fileID, "content_length": len(fileSaveReq.Content)})
 	})
 	router.GET("/file/:fileid", func(ctx *gin.Context) {
 		fileID := ctx.Param("fileid")
@@ -136,9 +80,8 @@ func Serve(ctx context.Context) {
 		slog.Info("Fetching file", "fileid", fileID)
 
 		// 模拟
-
 		fileContent := "This is a mock content for file " + fileID
-		ctx.JSON(http.StatusOK, gin.H{"fileid": fileID, "content": fileContent})
+		ctx.JSON(http.StatusOK, gin.H{"fileid": fileID, "content": fileContent, "language": "plaintext"})
 	})
 
 	serv := &http.Server{
