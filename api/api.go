@@ -32,7 +32,7 @@ func (h *Hub) broadcast(sender *websocket.Conn, msg []byte) {
 	defer h.mu.Unlock()
 	for c := range h.clients {
 		if c != sender {
-			go c.WriteMessage(websocket.BinaryMessage, msg)
+			c.WriteMessage(websocket.BinaryMessage, msg)
 		}
 	}
 }
@@ -73,12 +73,13 @@ func newHubManager() *HubManager {
 }
 
 func Serve(ctx context.Context) {
-	router := gin.Default()
+	engine := gin.Default()
 	corsConfig := cors.DefaultConfig()
 	corsConfig.AllowOrigins = []string{"*"}
-	router.Use(cors.New(corsConfig))
+	engine.Use(cors.New(corsConfig))
 
 	hubm := newHubManager()
+	router := engine.Group("/api")
 	router.GET("/ws/:room", func(ctx *gin.Context) {
 
 		conn, err := upgrader.Upgrade(ctx.Writer, ctx.Request, nil)
@@ -108,26 +109,41 @@ func Serve(ctx context.Context) {
 		delete(hub.clients, conn)
 		hub.mu.Unlock()
 	})
-	router.POST("/save/:fileid", func(ctx *gin.Context) {
+	router.POST("/file/:fileid", func(ctx *gin.Context) {
 		// file id 即为 ws 中的 room
 		fileID := ctx.Param("fileid")
 		if fileID == "" {
 			ctx.JSON(http.StatusBadRequest, gin.H{"error": "fileid is required"})
 			return
 		}
-		fileContent := ctx.PostForm("content")
-		if fileContent == "" {
+		var fileSaveReq FileSaveRequest
+		if err := ctx.ShouldBindJSON(&fileSaveReq); err != nil {
 			ctx.JSON(http.StatusBadRequest, gin.H{"error": "content is required"})
 			return
 		}
+		fileContent := fileSaveReq.Content
 		// [TODO] 保存文件
 		slog.Info("Saving file", "fileid", fileID, "content_length", len(fileContent))
 		ctx.JSON(http.StatusOK, gin.H{"status": "success", "fileid": fileID, "content_length": len(fileContent)})
 	})
+	router.GET("/file/:fileid", func(ctx *gin.Context) {
+		fileID := ctx.Param("fileid")
+		if fileID == "" {
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": "fileid is required"})
+			return
+		}
+		// [TODO] 获取文件内容
+		slog.Info("Fetching file", "fileid", fileID)
+
+		// 模拟
+
+		fileContent := "This is a mock content for file " + fileID
+		ctx.JSON(http.StatusOK, gin.H{"fileid": fileID, "content": fileContent})
+	})
 
 	serv := &http.Server{
 		Addr:    fmt.Sprintf("%s:%d", config.C.APIHost, config.C.APIPort),
-		Handler: router,
+		Handler: engine,
 	}
 	go func() {
 		<-ctx.Done()
