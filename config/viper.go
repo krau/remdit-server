@@ -15,7 +15,7 @@ type Config struct {
 	APIHost           string   `toml:"api_host" mapstructure:"api_host"`
 	APIPort           int      `toml:"api_port" mapstructure:"api_port"`
 	UploadsDir        string   `toml:"uploads_dir" mapstructure:"uploads_dir"`
-	HTTPHosts         []string `toml:"http_hosts" mapstructure:"http_hosts"`
+	ServerURLs        []string `toml:"server_urls" mapstructure:"server_urls"`
 }
 
 var C *Config

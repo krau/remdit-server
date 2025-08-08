@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand"
 	"net"
 	"os"
 	"remdit-server/config"
@@ -17,7 +18,7 @@ import (
 
 type SSHServer struct {
 	conf         *ssh.ServerConfig
-	fileInfoStor FileInfoStorage
+	fileInfoStor service.FileInfoStorage
 }
 
 type SessionState uint
@@ -46,15 +47,6 @@ func (s *SSHServer) HandleConn(conn net.Conn) {
 	var sessionState SessionState = SessionStateNone
 	fileID := uuid.New()
 
-	fileInfo := FileInfoPayload{
-		FileID:    fileID.String(),
-		EditUrl:   fmt.Sprintf("https://%s/edit/%s", config.C.SSHHost, fileID.String()), // [TODO]
-		EditToken: "example-token",                                                      // [TODO]
-	}
-	if err := s.fileInfoStor.Save(context.Background(), fileID.String(), fileInfo); err != nil {
-		slog.Error("failed to save file info", "err", err)
-		return
-	}
 	defer func() {
 		if err := s.fileInfoStor.Delete(context.Background(), fileID.String()); err != nil {
 			slog.Error("failed to delete file info", "err", err)
@@ -74,13 +66,19 @@ func (s *SSHServer) HandleConn(conn net.Conn) {
 					continue
 				}
 
-				payload := s.fileInfoStor.Get(context.Background(), fileID.String())
-				if payload == nil {
+				fileInfo := s.fileInfoStor.Get(context.Background(), fileID.String())
+				if fileInfo == nil {
 					slog.Error("file info not found", "fileID", fileID.String())
 					req.Reply(false, nil)
 					continue
 				}
-				req.Reply(true, payload.Marshal())
+
+				payload := &FileInfoMessagePayload{
+					FileID:  fileInfo.ID(),
+					EditUrl: fmt.Sprintf("%s/edit/%s", config.C.ServerURLs[rand.Intn(len(config.C.ServerURLs))], fileID.String()),
+				}
+
+				req.Reply(true, ssh.Marshal(payload))
 				sessionState = SessionStateFileInfo
 			case "listen":
 				if sessionState != SessionStateFileInfo {
@@ -175,6 +173,12 @@ func (s *SSHServer) HandleConn(conn net.Conn) {
 					}
 					slog.Info("SFTP server session ended", "remote_addr", sshConn.RemoteAddr(), "user", sshConn.User())
 					sessionState = SessionStateFileUpload
+
+					if err := s.fileInfoStor.Save(context.Background(), fileID.String(), handler); err != nil {
+						slog.Error("failed to save file info", "err", err)
+						req.Reply(false, nil)
+					}
+
 					return
 				default:
 					if req.WantReply {
@@ -187,7 +191,7 @@ func (s *SSHServer) HandleConn(conn net.Conn) {
 	slog.Info("SSH session ended", "remote_addr", sshConn.RemoteAddr(), "user", sshConn.User())
 }
 
-func Serve(ctx context.Context) error {
+func Serve(ctx context.Context, stor service.FileInfoStorage) error {
 	sshConf := &ssh.ServerConfig{
 		PublicKeyCallback: func(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 			return nil, nil
@@ -211,7 +215,7 @@ func Serve(ctx context.Context) error {
 	}
 	slog.Info("SSH server listening on", "addr", addr)
 
-	server := &SSHServer{conf: sshConf, fileInfoStor: NewFileInfoMemoryStorage()}
+	server := &SSHServer{conf: sshConf, fileInfoStor: stor}
 
 	go func() {
 		for {

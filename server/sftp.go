@@ -33,6 +33,18 @@ func (h *TempFileHandler) WriteFile(b []byte) error {
 	return nil
 }
 
+func (h *TempFileHandler) ID() string {
+	return h.randomID
+}
+
+func (h *TempFileHandler) Path() string {
+	return filepath.Join(h.tempDir, h.fileName)
+}
+
+func (h *TempFileHandler) Name() string {
+	return h.fileName
+}
+
 // NewTempFileHandler creates a handler with a unique temp directory
 func NewTempFileHandler(id string) *TempFileHandler {
 	tempDir := filepath.Join("remdit-uploads", id)
