@@ -30,86 +30,70 @@ const (
 	SessionStateListen
 )
 
-func (s *SSHServer) HandleConn(conn net.Conn) {
-	defer conn.Close()
+type ConnHandler struct {
+	conn         net.Conn
+	conf         *ssh.ServerConfig
+	fileInfoStor service.FileInfoStorage
+	state        SessionState
+	file         *TempFileHandler
+	serverConn   *ssh.ServerConn
+}
 
-	sshConn, chans, reqs, err := ssh.NewServerConn(conn, s.conf)
+func NewConnHandler(conn net.Conn, conf *ssh.ServerConfig, stor service.FileInfoStorage) *ConnHandler {
+	return &ConnHandler{
+		conn:         conn,
+		conf:         conf,
+		fileInfoStor: stor,
+	}
+}
+
+func (h *ConnHandler) Close() error {
+	if h.serverConn != nil {
+		return h.serverConn.Close()
+	}
+	if h.conn != nil {
+		return h.conn.Close()
+	}
+	return nil
+}
+
+func (h *ConnHandler) Handle(ctx context.Context) error {
+	defer h.Close()
+	conn := h.conn
+
+	sshConn, chans, reqs, err := ssh.NewServerConn(conn, h.conf)
 	if err != nil {
 		slog.Error("failed to create SSH server connection", "err", err)
-		return
+		return err
 	}
-	defer sshConn.Close()
+	h.serverConn = sshConn
 	slog.Info(
 		"SSH connection established",
 		"remote_addr", sshConn.RemoteAddr(),
 		"user", sshConn.User(),
 	)
-	var sessionState SessionState = SessionStateNone
+	h.state = SessionStateNone
+
 	fileID := uuid.New()
 
 	defer func() {
-		if err := s.fileInfoStor.Delete(context.Background(), fileID.String()); err != nil {
+		if err := h.fileInfoStor.Delete(ctx, fileID.String()); err != nil {
 			slog.Error("failed to delete file info", "err", err)
 		}
 	}()
 
-	handler := NewTempFileHandler(fileID.String())
+	handler := NewTempFileHandler(fileID.String(), sshConn)
+	h.file = handler
 	defer handler.Close()
 
-	go func(in <-chan *ssh.Request) {
-		for req := range in {
-			switch req.Type {
-			case "file-info":
-				if sessionState != SessionStateFileUpload {
-					slog.Warn("file-info request received in wrong state", "state", sessionState)
-					req.Reply(false, nil)
-					continue
-				}
-
-				fileInfo := s.fileInfoStor.Get(context.Background(), fileID.String())
-				if fileInfo == nil {
-					slog.Error("file info not found", "fileID", fileID.String())
-					req.Reply(false, nil)
-					continue
-				}
-
-				payload := &FileInfoMessagePayload{
-					FileID:  fileInfo.ID(),
-					EditUrl: fmt.Sprintf("%s/edit/%s", config.C.ServerURLs[rand.Intn(len(config.C.ServerURLs))], fileID.String()),
-				}
-
-				req.Reply(true, ssh.Marshal(payload))
-				sessionState = SessionStateFileInfo
-			case "listen":
-				if sessionState != SessionStateFileInfo {
-					slog.Warn("listen request received in wrong state", "state", sessionState)
-					req.Reply(false, nil)
-					continue
-				}
-				if err := s.fileInfoStor.Save(context.Background(), fileID.String(), handler); err != nil {
-					slog.Error("failed to save file info", "err", err)
-					req.Reply(false, nil)
-					return
-				}
-				req.Reply(true, nil)
-				sessionState = SessionStateListen
-
-				// [TODO] 监听 api 的事件并发送到客户端
-
-			default:
-				if req.WantReply {
-					req.Reply(false, nil)
-				}
-			}
-		}
-	}(reqs)
+	go h.HandleGlobalReqs(ctx, reqs)
 
 	for newChan := range chans {
 		if newChan.ChannelType() != "session" {
 			newChan.Reject(ssh.UnknownChannelType, "only session channels are supported")
 			continue
 		}
-		if sessionState != SessionStateNone {
+		if h.state != SessionStateNone {
 			newChan.Reject(ssh.Prohibited, "session already in progress")
 			continue
 		}
@@ -124,7 +108,7 @@ func (s *SSHServer) HandleConn(conn net.Conn) {
 			for req := range in {
 				switch req.Type {
 				case "subsystem":
-					if sessionState != SessionStateNone {
+					if h.state != SessionStateNone {
 						req.Reply(false, nil)
 						continue
 					}
@@ -154,7 +138,7 @@ func (s *SSHServer) HandleConn(conn net.Conn) {
 						}
 					}
 					slog.Info("SFTP server session ended", "remote_addr", sshConn.RemoteAddr(), "user", sshConn.User())
-					sessionState = SessionStateFileUpload
+					h.state = SessionStateFileUpload
 
 					return
 				default:
@@ -166,6 +150,54 @@ func (s *SSHServer) HandleConn(conn net.Conn) {
 		}(requests)
 	}
 	slog.Info("SSH session ended", "remote_addr", sshConn.RemoteAddr(), "user", sshConn.User())
+	return nil
+}
+
+func (h *ConnHandler) HandleGlobalReqs(ctx context.Context, reqs <-chan *ssh.Request) {
+	for req := range reqs {
+		switch req.Type {
+		case "file-info":
+			if h.state != SessionStateFileUpload {
+				slog.Warn("file-info request received in wrong state", "state", h.state)
+				req.Reply(false, nil)
+				continue
+			}
+
+			payload := &FileInfoMessagePayload{
+				FileID:  h.file.ID(),
+				EditUrl: fmt.Sprintf("%s/edit/%s", config.C.ServerURLs[rand.Intn(len(config.C.ServerURLs))], h.file.ID()),
+			}
+
+			req.Reply(true, ssh.Marshal(payload))
+			h.state = SessionStateFileInfo
+		case "listen":
+			if h.state != SessionStateFileInfo {
+				slog.Warn("listen request received in wrong state", "state", h.state)
+				req.Reply(false, nil)
+				continue
+			}
+			if err := h.fileInfoStor.Save(context.Background(), h.file.ID(), h.file); err != nil {
+				slog.Error("failed to save file info", "err", err)
+				req.Reply(false, nil)
+				return
+			}
+			req.Reply(true, nil)
+			h.state = SessionStateListen
+		default:
+			if req.WantReply {
+				req.Reply(false, nil)
+			}
+		}
+	}
+}
+
+func (s *SSHServer) HandleConn(conn net.Conn) {
+	ctx := context.Background()
+	handler := NewConnHandler(conn, s.conf, s.fileInfoStor)
+	if err := handler.Handle(ctx); err != nil {
+		slog.Error("failed to handle SSH connection", "err", err)
+	}
+	slog.Info("SSH connection closed", "remote_addr", conn.RemoteAddr())
 }
 
 func Serve(ctx context.Context, stor service.FileInfoStorage) error {

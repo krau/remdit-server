@@ -7,8 +7,10 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"remdit-server/config"
 
 	"github.com/pkg/sftp"
+	"golang.org/x/crypto/ssh"
 )
 
 const (
@@ -16,10 +18,11 @@ const (
 )
 
 type TempFileHandler struct {
-	randomID string
-	tempDir  string
-	fileName string
-	uploaded bool
+	serverConn *ssh.ServerConn
+	randomID   string
+	tempDir    string
+	fileName   string
+	uploaded   bool
 }
 
 func (h *TempFileHandler) WriteFile(b []byte) error {
@@ -29,6 +32,13 @@ func (h *TempFileHandler) WriteFile(b []byte) error {
 	fullPath := filepath.Join(h.tempDir, h.fileName)
 	if err := os.WriteFile(fullPath, b, 0644); err != nil {
 		return fmt.Errorf("failed to write file: %w", err)
+	}
+	ok, _, err := h.serverConn.SendRequest("file-save", true, b)
+	if err != nil {
+		return fmt.Errorf("failed to send file-save request: %w", err)
+	}
+	if !ok {
+		return errors.New("file-save request was rejected")
 	}
 	return nil
 }
@@ -46,11 +56,12 @@ func (h *TempFileHandler) Name() string {
 }
 
 // NewTempFileHandler creates a handler with a unique temp directory
-func NewTempFileHandler(id string) *TempFileHandler {
-	tempDir := filepath.Join("remdit-uploads", id)
+func NewTempFileHandler(id string, serverConn *ssh.ServerConn) *TempFileHandler {
+	tempDir := filepath.Join(config.C.UploadsDir, id)
 	return &TempFileHandler{
-		randomID: id,
-		tempDir:  tempDir,
+		randomID:   id,
+		tempDir:    tempDir,
+		serverConn: serverConn,
 	}
 }
 

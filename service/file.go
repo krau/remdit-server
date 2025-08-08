@@ -15,6 +15,7 @@ type FileInfo interface {
 	ID() string
 	Path() string
 	Name() string
+	// WriteFile 应该同时保存到本地和传回客户端通知其保存
 	WriteFile(b []byte) error
 }
 
