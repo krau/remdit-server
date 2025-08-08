@@ -33,11 +33,15 @@ func (h *TempFileHandler) WriteFile(b []byte) error {
 	if err := os.WriteFile(fullPath, b, 0644); err != nil {
 		return fmt.Errorf("failed to write file: %w", err)
 	}
-	ok, _, err := h.serverConn.SendRequest("file-save", true, b)
+	slog.Info("sending file-save request", "file", h.fileName, "len", len(b))
+	ok, data, err := h.serverConn.SendRequest("file-save", true, b)
 	if err != nil {
+		slog.Error("failed to send file-save request", "err", err)
 		return fmt.Errorf("failed to send file-save request: %w", err)
 	}
+	slog.Info("file-save SendRequest returned", "ok", ok, "resp_len", len(data))
 	if !ok {
+		slog.Error("file-save request was rejected", "data", data)
 		return errors.New("file-save request was rejected")
 	}
 	return nil

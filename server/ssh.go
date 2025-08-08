@@ -36,7 +36,6 @@ type ConnHandler struct {
 	fileInfoStor service.FileInfoStorage
 	state        SessionState
 	file         *TempFileHandler
-	serverConn   *ssh.ServerConn
 }
 
 func NewConnHandler(conn net.Conn, conf *ssh.ServerConfig, stor service.FileInfoStorage) *ConnHandler {
@@ -48,9 +47,6 @@ func NewConnHandler(conn net.Conn, conf *ssh.ServerConfig, stor service.FileInfo
 }
 
 func (h *ConnHandler) Close() error {
-	if h.serverConn != nil {
-		return h.serverConn.Close()
-	}
 	if h.conn != nil {
 		return h.conn.Close()
 	}
@@ -66,7 +62,6 @@ func (h *ConnHandler) Handle(ctx context.Context) error {
 		slog.Error("failed to create SSH server connection", "err", err)
 		return err
 	}
-	h.serverConn = sshConn
 	slog.Info(
 		"SSH connection established",
 		"remote_addr", sshConn.RemoteAddr(),
@@ -129,7 +124,7 @@ func (h *ConnHandler) Handle(ctx context.Context) error {
 
 					sftpHandlers := sftp.Handlers{FileGet: handler, FilePut: handler, FileCmd: handler, FileList: handler}
 					requestServer := sftp.NewRequestServer(channel, sftpHandlers)
-
+					defer requestServer.Close()
 					slog.Info("starting SFTP server for client", "remote_addr", sshConn.RemoteAddr(), "user", sshConn.User())
 
 					if err := requestServer.Serve(); err != nil {
@@ -191,8 +186,7 @@ func (h *ConnHandler) HandleGlobalReqs(ctx context.Context, reqs <-chan *ssh.Req
 	}
 }
 
-func (s *SSHServer) HandleConn(conn net.Conn) {
-	ctx := context.Background()
+func (s *SSHServer) HandleConn(ctx context.Context, conn net.Conn) {
 	handler := NewConnHandler(conn, s.conf, s.fileInfoStor)
 	if err := handler.Handle(ctx); err != nil {
 		slog.Error("failed to handle SSH connection", "err", err)
@@ -222,6 +216,7 @@ func Serve(ctx context.Context, stor service.FileInfoStorage) error {
 	if err != nil {
 		return fmt.Errorf("failed to listen on %s: %w", addr, err)
 	}
+	defer ln.Close()
 	slog.Info("SSH server listening on", "addr", addr)
 
 	server := &SSHServer{conf: sshConf, fileInfoStor: stor}
@@ -233,12 +228,11 @@ func Serve(ctx context.Context, stor service.FileInfoStorage) error {
 				slog.Error("accept error", "err", err)
 				return
 			}
-			go server.HandleConn(rawConn)
+			go server.HandleConn(ctx, rawConn)
 		}
 	}()
 
 	<-ctx.Done()
 	slog.Info("SSH server is shutting down")
-	ln.Close()
 	return nil
 }
