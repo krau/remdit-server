@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import ToastContainer from '@/components/ui/ToastContainer.vue'
+import { Toaster } from '@/components/ui/sonner'
+import 'vue-sonner/style.css'
 </script>
 
 <template>
+  <Toaster />
   <router-view />
-  <ToastContainer />
 </template>
 
 <style scoped></style>

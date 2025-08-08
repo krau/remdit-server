@@ -26,6 +26,9 @@
             {{ isConnected ? '已连接' : '连接中...' }}
           </div>
 
+          <!-- 暗色模式切换 -->
+          <DarkModeMenu />
+
           <!-- 保存按钮 -->
           <Button @click="handleSave" :disabled="isSaving || !isDirty" size="sm" class="gap-2">
             <LoadingSpinner v-if="isSaving" size="sm" />
@@ -99,6 +102,7 @@ import { ArrowLeft, Save, AlertCircle } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import LoadingSpinner from '@/components/ui/LoadingSpinner.vue'
 import MonacoEditor from '@/components/MonacoEditor.vue'
+import DarkModeMenu from '@/components/DarkModeMenu.vue'
 import { getDocument, saveDocument } from '@/lib/api'
 import { useToast } from '@/composables/useToast'
 

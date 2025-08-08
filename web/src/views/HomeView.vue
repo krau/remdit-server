@@ -2,7 +2,12 @@
   <div class="min-h-screen bg-background">
     <div class="container mx-auto px-4 py-8">
       <div class="max-w-4xl mx-auto">
-        <header class="text-center mb-12">
+        <header class="text-center mb-12 relative">
+          <!-- 暗色模式切换按钮 -->
+          <div class="absolute top-0 right-0">
+            <DarkModeMenu />
+          </div>
+
           <h1 class="text-4xl font-bold mb-4">Remdit</h1>
           <p class="text-lg text-muted-foreground">Collaborative Remote Document Editing</p>
         </header>
@@ -48,6 +53,7 @@ import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { FileText } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
+import DarkModeMenu from '@/components/DarkModeMenu.vue'
 
 const router = useRouter()
 

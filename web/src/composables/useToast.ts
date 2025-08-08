@@ -1,65 +1,26 @@
-import { ref } from 'vue'
-
-export interface Toast {
-    id: string
-    title: string
-    description?: string
-    type: 'success' | 'error' | 'info' | 'warning'
-    duration?: number
-}
-
-const toasts = ref<Toast[]>([])
+import { toast } from 'vue-sonner'
 
 export function useToast() {
-    function addToast(toast: Omit<Toast, 'id'>) {
-        const id = Math.random().toString(36).substr(2, 9)
-        const newToast: Toast = {
-            id,
-            duration: 3000,
-            ...toast
-        }
+  function success(title: string, description?: string) {
+    return toast.success(title, { description })
+  }
 
-        toasts.value.push(newToast)
+  function error(title: string, description?: string) {
+    return toast.error(title, { description })
+  }
 
-        if (newToast.duration && newToast.duration > 0) {
-            setTimeout(() => {
-                removeToast(id)
-            }, newToast.duration)
-        }
+  function info(title: string, description?: string) {
+    return toast.info(title, { description })
+  }
 
-        return id
-    }
+  function warning(title: string, description?: string) {
+    return toast.warning(title, { description })
+  }
 
-    function removeToast(id: string) {
-        const index = toasts.value.findIndex(t => t.id === id)
-        if (index > -1) {
-            toasts.value.splice(index, 1)
-        }
-    }
-
-    function success(title: string, description?: string) {
-        return addToast({ title, description, type: 'success' })
-    }
-
-    function error(title: string, description?: string) {
-        return addToast({ title, description, type: 'error' })
-    }
-
-    function info(title: string, description?: string) {
-        return addToast({ title, description, type: 'info' })
-    }
-
-    function warning(title: string, description?: string) {
-        return addToast({ title, description, type: 'warning' })
-    }
-
-    return {
-        toasts,
-        addToast,
-        removeToast,
-        success,
-        error,
-        info,
-        warning
-    }
+  return {
+    success,
+    error,
+    info,
+    warning
+  }
 }
