@@ -38,7 +38,7 @@ func NewConnHandler(ctx context.Context, conn net.Conn, conf *ssh.ServerConfig, 
 func (h *ConnHandler) Close() error {
 	errs := make([]error, 0)
 	if h.file != nil {
-		if err := h.file.Close(); err != nil {
+		if err := h.file.Remove(); err != nil {
 			errs = append(errs, fmt.Errorf("failed to close temp file handler: %w", err))
 		}
 	}

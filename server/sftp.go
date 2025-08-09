@@ -44,8 +44,8 @@ func NewTempFileHandler(id string) *TempFileHandler {
 	}
 }
 
-// Close cleans up the temp directory
-func (h *TempFileHandler) Close() error {
+// Remove cleans up the temp directory
+func (h *TempFileHandler) Remove() error {
 	if err := os.RemoveAll(h.tempDir); err != nil {
 		slog.Error("failed to clean temp directory", "dir", h.tempDir, "err", err)
 		return err

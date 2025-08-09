@@ -16,7 +16,9 @@ import (
 var rootCmd = &cobra.Command{
 	Use: "remdit-server",
 	PreRun: func(cmd *cobra.Command, args []string) {
-		logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+		logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+			Level: slog.LevelDebug,
+		}))
 		slog.SetDefault(logger)
 		config.InitConfig()
 	},
