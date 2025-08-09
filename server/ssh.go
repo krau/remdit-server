@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"log/slog"
 	"net"
@@ -26,13 +27,51 @@ func (s *SSHServer) HandleConn(ctx context.Context, conn net.Conn) {
 	slog.Info("SSH connection closed", "remote_addr", conn.RemoteAddr())
 }
 
-func Serve(ctx context.Context, stor service.FileInfoStorage) error {
-	sshConf := &ssh.ServerConfig{
+func NewSSHServerConfig() *ssh.ServerConfig {
+	if config.C.SSHPasswordAuth {
+		return &ssh.ServerConfig{
+			PasswordCallback: func(conn ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
+				slog.Info("SSH password authentication attempt",
+					"user", conn.User(),
+					"remote_addr", conn.RemoteAddr())
+
+				for _, allowedPassword := range config.C.SSHAllowedPasswords {
+					if allowedPassword == "" {
+						continue
+					}
+					if subtle.ConstantTimeCompare([]byte(password), []byte(allowedPassword)) == 1 {
+						slog.Info("SSH authentication successful",
+							"user", conn.User(),
+							"remote_addr", conn.RemoteAddr())
+						return &ssh.Permissions{}, nil
+					}
+				}
+				slog.Warn("SSH authentication failed: invalid password",
+					"user", conn.User(),
+					"remote_addr", conn.RemoteAddr())
+				return nil, fmt.Errorf("invalid password")
+			},
+			AuthLogCallback: func(conn ssh.ConnMetadata, method string, err error) {
+				if err != nil {
+					slog.Warn("SSH authentication failed",
+						"user", conn.User(),
+						"method", method,
+						"remote_addr", conn.RemoteAddr(),
+						"err", err)
+				}
+			},
+		}
+	}
+	return &ssh.ServerConfig{
 		PublicKeyCallback: func(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 			return nil, nil
 		},
 		PublicKeyAuthAlgorithms: []string{ssh.KeyAlgoED25519},
 	}
+}
+
+func Serve(ctx context.Context, stor service.FileInfoStorage) error {
+	sshConf := NewSSHServerConfig()
 	priKey, err := os.ReadFile(config.C.SSHPrivateKeyPath)
 	if err != nil {
 		return fmt.Errorf("failed to read SSH private key: %w", err)

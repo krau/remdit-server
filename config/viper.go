@@ -9,13 +9,15 @@ import (
 )
 
 type Config struct {
-	SSHPrivateKeyPath string   `toml:"ssh_private_key_path" mapstructure:"ssh_private_key_path"`
-	SSHPort           int      `toml:"ssh_port" mapstructure:"ssh_port"`
-	SSHHost           string   `toml:"ssh_host" mapstructure:"ssh_host"`
-	APIHost           string   `toml:"api_host" mapstructure:"api_host"`
-	APIPort           int      `toml:"api_port" mapstructure:"api_port"`
-	UploadsDir        string   `toml:"uploads_dir" mapstructure:"uploads_dir"`
-	ServerURLs        []string `toml:"server_urls" mapstructure:"server_urls"`
+	SSHPrivateKeyPath   string   `toml:"ssh_private_key_path" mapstructure:"ssh_private_key_path"`
+	SSHPort             int      `toml:"ssh_port" mapstructure:"ssh_port"`
+	SSHHost             string   `toml:"ssh_host" mapstructure:"ssh_host"`
+	APIHost             string   `toml:"api_host" mapstructure:"api_host"`
+	APIPort             int      `toml:"api_port" mapstructure:"api_port"`
+	UploadsDir          string   `toml:"uploads_dir" mapstructure:"uploads_dir"`
+	ServerURLs          []string `toml:"server_urls" mapstructure:"server_urls"`
+	SSHPasswordAuth     bool     `toml:"ssh_password_auth" mapstructure:"ssh_password_auth"`
+	SSHAllowedPasswords []string `toml:"ssh_allowed_passwords" mapstructure:"ssh_allowed_passwords"`
 }
 
 var C *Config
