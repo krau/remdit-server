@@ -125,6 +125,7 @@ func Serve(ctx context.Context, stor service.FileInfoStorage) {
 
 	app.Use("/", filesystem.New(filesystem.Config{
 		Root: http.FS(webembed.Static),
+		NotFoundFile: "index.html", // let the frontend handle
 	}))
 
 	addr := fmt.Sprintf("%s:%d", config.C.APIHost, config.C.APIPort)
