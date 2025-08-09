@@ -48,14 +48,32 @@ func NewConnHandler(conn net.Conn, conf *ssh.ServerConfig, stor service.FileInfo
 }
 
 func (h *ConnHandler) Close() error {
-	if h.conn != nil {
-		return h.conn.Close()
+	errs := make([]error, 0)
+	if h.file != nil {
+		if err := h.file.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("failed to close temp file handler: %w", err))
+		}
 	}
+	if h.file != nil && h.fileInfoStor != nil {
+		if err := h.fileInfoStor.Delete(context.Background(), h.file.ID()); err != nil {
+			errs = append(errs, fmt.Errorf("failed to delete file info: %w", err))
+		}
+	}
+	if h.serverConn != nil {
+		if err := h.serverConn.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("failed to close SSH server connection: %w", err))
+		}
+	}
+	if h.conn != nil {
+		if err := h.conn.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("failed to close connection: %w", err))
+		}
+	}
+
 	return nil
 }
 
 func (h *ConnHandler) Handle(ctx context.Context) error {
-	defer h.Close()
 	conn := h.conn
 
 	sshConn, chans, reqs, err := ssh.NewServerConn(conn, h.conf)
@@ -73,15 +91,8 @@ func (h *ConnHandler) Handle(ctx context.Context) error {
 
 	fileID := uuid.New()
 
-	defer func() {
-		if err := h.fileInfoStor.Delete(ctx, fileID.String()); err != nil {
-			slog.Error("failed to delete file info", "err", err)
-		}
-	}()
-
 	handler := NewTempFileHandler(fileID.String())
 	h.file = handler
-	defer handler.Close()
 
 	go h.HandleGlobalReqs(ctx, reqs)
 
@@ -192,6 +203,7 @@ func (h *ConnHandler) HandleGlobalReqs(ctx context.Context, reqs <-chan *ssh.Req
 
 func (s *SSHServer) HandleConn(ctx context.Context, conn net.Conn) {
 	handler := NewConnHandler(conn, s.conf, s.fileInfoStor)
+	defer handler.Close()
 	if err := handler.Handle(ctx); err != nil {
 		slog.Error("failed to handle SSH connection", "err", err)
 	}
