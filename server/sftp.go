@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	maxUploadSize = 10 * 1024 * 1024 // 10 MB
+	maxUploadSize = 4 * 1024 * 1024 // 4 MB, for text files it should be enough
 )
 
 type TempFileHandler struct {
@@ -22,28 +22,6 @@ type TempFileHandler struct {
 	fileName string
 	uploaded bool
 }
-
-// func (h *TempFileHandler) WriteFile(b []byte) error {
-// 	if !h.uploaded {
-// 		return errors.New("file not uploaded yet")
-// 	}
-// 	fullPath := filepath.Join(h.tempDir, h.fileName)
-// 	if err := os.WriteFile(fullPath, b, 0644); err != nil {
-// 		return fmt.Errorf("failed to write file: %w", err)
-// 	}
-// 	slog.Info("sending file-save request", "file", h.fileName, "len", len(b))
-// 	ok, data, err := h.serverConn.SendRequest("file-save", true, b)
-// 	if err != nil {
-// 		slog.Error("failed to send file-save request", "err", err)
-// 		return fmt.Errorf("failed to send file-save request: %w", err)
-// 	}
-// 	slog.Info("file-save SendRequest returned", "ok", ok, "resp_len", len(data))
-// 	if !ok {
-// 		slog.Error("file-save request was rejected", "data", data)
-// 		return errors.New("file-save request was rejected")
-// 	}
-// 	return nil
-// }
 
 func (h *TempFileHandler) ID() string {
 	return h.randomID
@@ -97,12 +75,7 @@ func (h *TempFileHandler) Filewrite(r *sftp.Request) (io.WriterAt, error) {
 	if h.uploaded {
 		return nil, errors.New("file already uploaded")
 	}
-
 	slog.Debug("SFTP write request", "path", r.Filepath)
-	// Assign filename and create directories
-	if err := os.MkdirAll(h.tempDir, 0755); err != nil {
-		slog.Error("failed to create temp directory", "dir", h.tempDir, "err", err)
-	}
 	h.fileName = filepath.Base(r.Filepath)
 	fullPath := filepath.Join(h.tempDir, h.fileName)
 	dir := filepath.Dir(fullPath)
