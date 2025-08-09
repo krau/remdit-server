@@ -32,6 +32,8 @@ func leakBucket() gin.HandlerFunc {
 }
 
 func Serve(ctx context.Context, stor service.FileInfoStorage) {
+	gin.SetMode(gin.ReleaseMode)
+
 	engine := gin.Default()
 	corsConfig := cors.DefaultConfig()
 	corsConfig.AllowOrigins = []string{"*"}
@@ -127,10 +129,12 @@ func Serve(ctx context.Context, stor service.FileInfoStorage) {
 		ctx.JSON(http.StatusOK, gin.H{"fileid": fileID, "content": string(fileContent), "language": "plaintext"})
 	})
 
+
 	serv := &http.Server{
 		Addr:    fmt.Sprintf("%s:%d", config.C.APIHost, config.C.APIPort),
 		Handler: engine,
 	}
+
 	go func() {
 		<-ctx.Done()
 		slog.Info("API server is shutting down")
