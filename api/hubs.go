@@ -4,7 +4,7 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/gorilla/websocket"
+	"github.com/gofiber/contrib/websocket"
 )
 
 type EditingHub struct {

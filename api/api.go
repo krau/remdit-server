@@ -9,79 +9,61 @@ import (
 	"remdit-server/config"
 	"remdit-server/service"
 	"remdit-server/webembed"
-	"time"
 
-	"github.com/gin-contrib/static"
-
-	"github.com/gin-contrib/cors"
-	"github.com/gin-gonic/gin"
+	"github.com/bytedance/sonic"
+	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/filesystem"
+	"github.com/gofiber/fiber/v2/middleware/limiter"
 	"github.com/google/uuid"
-	"github.com/gorilla/websocket"
-	"go.uber.org/ratelimit"
-)
 
-var (
-	wsUpgrader = websocket.Upgrader{
-		CheckOrigin: func(r *http.Request) bool { return true },
-	}
-	limiter ratelimit.Limiter
+	"github.com/gofiber/contrib/websocket"
+	"github.com/gofiber/fiber/v2/middleware/logger"
 )
-
-func leakBucket() gin.HandlerFunc {
-	return func(ctx *gin.Context) {
-		limiter.Take()
-	}
-}
 
 func Serve(ctx context.Context, stor service.FileInfoStorage) {
-	gin.SetMode(gin.ReleaseMode)
-
-	engine := gin.Default()
-	corsConfig := cors.DefaultConfig()
-	corsConfig.AllowOrigins = []string{"*"}
-	engine.Use(cors.New(corsConfig))
-
-	fs, err := static.EmbedFolder(webembed.Static, "dist")
-	if err != nil {
-		slog.Error("Failed to embed static files", "err", err)
-		os.Exit(1)
-	}
-	engine.Use(static.Serve("/", fs))
-
-	router := engine.Group("/api")
-	limiter = ratelimit.New(max(config.C.APIRPS, 2))
-	router.Use(leakBucket())
+	app := fiber.New(fiber.Config{
+		JSONEncoder: sonic.Marshal,
+		JSONDecoder: sonic.Unmarshal,
+		Prefork:     false,
+	})
+	loggerCfg := logger.ConfigDefault
+	loggerCfg.Format = "${time} | ${status} | ${latency} | ${ip} | ${method} | ${path} | ${queryParams} | ${error}\n"
+	app.Use(logger.New(loggerCfg))
+	rg := app.Group("/api")
+	rg.Use(limiter.New(limiter.Config{
+		Max: max(config.C.APIRPM, 2),
+	}))
 
 	hubManager := NewHubManager()
-	router.GET("/socket/:room", func(ctx *gin.Context) {
-		room := ctx.Param("room")
-		if room == "" {
-			ctx.JSON(http.StatusBadRequest, gin.H{"error": "room is required"})
-			return
+
+	rg.Get("/socket/:room", func(c *fiber.Ctx) error {
+		if websocket.IsWebSocketUpgrade(c) {
+			room := c.Params("room")
+			if room == "" {
+				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "room is required"})
+			}
+			fileID, err := uuid.Parse(room)
+			if err != nil {
+				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid room format"})
+			}
+			fileInfo := stor.Get(c.Context(), fileID.String())
+			if fileInfo == nil {
+				return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "file not found"})
+			}
+			slog.Info("WebSocket connection request", "room", room, "fileid", fileID)
+			return c.Next()
 		}
-		fileid, err := uuid.Parse(room)
-		if err != nil {
-			ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid room format"})
-			return
-		}
-		fileInfo := stor.Get(ctx, fileid.String())
-		if fileInfo == nil {
-			ctx.JSON(http.StatusNotFound, gin.H{"error": "file not found"})
-			return
-		}
-		slog.Info("WebSocket connection request", "room", room, "fileid", fileid)
-		conn, err := wsUpgrader.Upgrade(ctx.Writer, ctx.Request, nil)
-		if err != nil {
-			return
-		}
-		defer conn.Close()
+		return fiber.ErrUpgradeRequired
+	})
+	rg.Get("/socket/:room", websocket.New(func(c *websocket.Conn) {
+		room := c.Params("room")
 		hub := hubManager.GetHub(room)
 		defer hubManager.CleanupHub(room)
-		hub.AddClient(conn)
-		defer hub.RemoveClient(conn)
+		hub.AddClient(c)
+		defer hub.RemoveClient(c)
 
 		for {
-			mt, msg, err := conn.ReadMessage()
+			mt, msg, err := c.ReadMessage()
 			if err != nil {
 				slog.Error("Failed to read message", "err", err)
 				break
@@ -91,71 +73,72 @@ func Serve(ctx context.Context, stor service.FileInfoStorage) {
 			}
 			hub.BroadcastMessage(msg)
 		}
-	})
-	router.PUT("/file/:fileid", func(ctx *gin.Context) {
-		// file id 即为 ws 中的 room
-		fileID := ctx.Param("fileid")
+	}))
+	rg.Use("/file/:fileid", func(c *fiber.Ctx) error {
+		fileID := c.Params("fileid")
 		if fileID == "" {
-			ctx.JSON(http.StatusBadRequest, gin.H{"error": "fileid is required"})
-			return
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "fileid is required"})
 		}
-		var fileSaveReq FileSaveRequest
-		if err := ctx.ShouldBindJSON(&fileSaveReq); err != nil {
-			ctx.JSON(http.StatusBadRequest, gin.H{"error": "content is required"})
-			return
+		if _, err := uuid.Parse(fileID); err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid fileid format"})
 		}
-		fileInfo := stor.Get(ctx, fileID)
+		fileInfo := stor.Get(c.Context(), fileID)
 		if fileInfo == nil {
-			ctx.JSON(http.StatusNotFound, gin.H{"error": "file not found"})
-			return
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "file not found"})
+		}
+		c.Locals("fileInfo", fileInfo)
+		return c.Next()
+	})
+	rg.Put("/file/:fileid", func(c *fiber.Ctx) error {
+		var fileSaveReq FileSaveRequest
+		if err := c.BodyParser(&fileSaveReq); err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "content is required"})
+		}
+		fileID := c.Params("fileid")
+		fileInfo := c.Locals("fileInfo").(service.FileInfo)
+		if fileInfo == nil {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "file not found"})
 		}
 		slog.Info("Saving file", "fileid", fileID, "content_length", len(fileSaveReq.Content))
-		if err := service.WriteAndSyncFile(ctx, stor, fileID, []byte(fileSaveReq.Content)); err != nil {
-			slog.Error("Failed to send file-save request", "err", err)
-			ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to send file-save request"})
-			return
+		if err := service.WriteAndSyncFile(c.Context(), stor, fileID, []byte(fileSaveReq.Content)); err != nil {
+			slog.Error("Failed to write file", "fileid", fileID, "err", err)
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to save file"})
 		}
-		ctx.JSON(http.StatusOK, gin.H{"status": "success", "fileid": fileID, "content_length": len(fileSaveReq.Content)})
+		return c.Status(fiber.StatusOK).JSON(fiber.Map{"message": "file saved successfully"})
 	})
-	router.GET("/file/:fileid", func(ctx *gin.Context) {
-		fileID := ctx.Param("fileid")
-		if fileID == "" {
-			ctx.JSON(http.StatusBadRequest, gin.H{"error": "fileid is required"})
-			return
-		}
-		fileInfo := stor.Get(ctx, fileID)
+	rg.Get("/file/:fileid", func(c *fiber.Ctx) error {
+		fileInfo := c.Locals("fileInfo").(service.FileInfo)
 		if fileInfo == nil {
-			ctx.JSON(http.StatusNotFound, gin.H{"error": "file not found"})
-			return
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "file not found"})
 		}
-		slog.Info("Fetching file", "fileid", fileID)
-		fileContent, err := os.ReadFile(fileInfo.Path())
+		content, err := os.ReadFile(fileInfo.Path())
 		if err != nil {
-			slog.Error("Failed to read file", "fileid", fileID, "err", err)
-			ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read file"})
-			return
+			slog.Error("Failed to read file", "fileid", fileInfo.ID(), "err", err)
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to read file"})
 		}
-		ctx.JSON(http.StatusOK, gin.H{"fileid": fileID, "content": string(fileContent), "language": "plaintext"})
+		return c.Status(fiber.StatusOK).JSON(fiber.Map{
+			"fileid":  fileInfo.ID(),
+			"content": string(content),
+			// "language": "plaintext", // [TODO]
+		})
 	})
 
-	serv := &http.Server{
-		Addr:    fmt.Sprintf("%s:%d", config.C.APIHost, config.C.APIPort),
-		Handler: engine,
-	}
+	app.Use("/", filesystem.New(filesystem.Config{
+		Root: http.FS(webembed.Static),
+	}))
 
+	addr := fmt.Sprintf("%s:%d", config.C.APIHost, config.C.APIPort)
 	go func() {
-		<-ctx.Done()
-		slog.Info("API server is shutting down")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := serv.Shutdown(shutdownCtx); err != nil {
-			slog.Error("Failed to shutdown server", "err", err)
-			return
+		if err := app.Listen(addr); err != nil {
+			slog.Error("Failed to start API server", "err", err)
+			os.Exit(1)
 		}
-		slog.Info("API server stopped")
 	}()
-	if err := serv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		slog.Error("Failed to start API server", "err", err)
-		return
+	<-ctx.Done()
+	slog.Info("API server is shutting down")
+	if err := app.Shutdown(); err != nil {
+		slog.Error("Failed to gracefully shutdown API server", "err", err)
+	} else {
+		slog.Info("API server shutdown successfully")
 	}
 }
