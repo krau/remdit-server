@@ -31,7 +31,7 @@ func InitConfig() {
 	viper.AutomaticEnv()
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 
-	viper.SetDefault("apr_rpm", 831)
+	viper.SetDefault("api_rpm", 831)
 
 	if err := viper.ReadInConfig(); err != nil {
 		slog.Error("failed to read config file", "err", err)
