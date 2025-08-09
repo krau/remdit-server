@@ -14,6 +14,7 @@ type Config struct {
 	SSHHost             string   `toml:"ssh_host" mapstructure:"ssh_host"`
 	APIHost             string   `toml:"api_host" mapstructure:"api_host"`
 	APIPort             int      `toml:"api_port" mapstructure:"api_port"`
+	APIRPS              int     `toml:"api_rps" mapstructure:"api_rps"`
 	UploadsDir          string   `toml:"uploads_dir" mapstructure:"uploads_dir"`
 	ServerURLs          []string `toml:"server_urls" mapstructure:"server_urls"`
 	SSHPasswordAuth     bool     `toml:"ssh_password_auth" mapstructure:"ssh_password_auth"`

@@ -8,16 +8,27 @@ import (
 	"os"
 	"remdit-server/config"
 	"remdit-server/service"
+
 	"time"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"go.uber.org/ratelimit"
 )
 
-var wsUpgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
+var (
+	wsUpgrader = websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool { return true },
+	}
+	limiter ratelimit.Limiter
+)
+
+func leakBucket() gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		limiter.Take()
+	}
 }
 
 func Serve(ctx context.Context, stor service.FileInfoStorage) {
@@ -27,6 +38,8 @@ func Serve(ctx context.Context, stor service.FileInfoStorage) {
 	engine.Use(cors.New(corsConfig))
 
 	router := engine.Group("/api")
+	limiter = ratelimit.New(max(config.C.APIRPS, 2))
+	router.Use(leakBucket())
 
 	hubManager := NewHubManager()
 	router.GET("/socket/:room", func(ctx *gin.Context) {
