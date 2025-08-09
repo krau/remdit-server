@@ -8,8 +8,10 @@ import (
 	"os"
 	"remdit-server/config"
 	"remdit-server/service"
-
+	"remdit-server/webembed"
 	"time"
+
+	"github.com/gin-contrib/static"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -38,6 +40,13 @@ func Serve(ctx context.Context, stor service.FileInfoStorage) {
 	corsConfig := cors.DefaultConfig()
 	corsConfig.AllowOrigins = []string{"*"}
 	engine.Use(cors.New(corsConfig))
+
+	fs, err := static.EmbedFolder(webembed.Static, "dist")
+	if err != nil {
+		slog.Error("Failed to embed static files", "err", err)
+		os.Exit(1)
+	}
+	engine.Use(static.Serve("/", fs))
 
 	router := engine.Group("/api")
 	limiter = ratelimit.New(max(config.C.APIRPS, 2))
@@ -128,7 +137,6 @@ func Serve(ctx context.Context, stor service.FileInfoStorage) {
 		}
 		ctx.JSON(http.StatusOK, gin.H{"fileid": fileID, "content": string(fileContent), "language": "plaintext"})
 	})
-
 
 	serv := &http.Server{
 		Addr:    fmt.Sprintf("%s:%d", config.C.APIHost, config.C.APIPort),
