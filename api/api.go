@@ -86,7 +86,11 @@ func Serve(ctx context.Context, stor service.FileInfoStorage) {
 			return
 		}
 		slog.Info("Saving file", "fileid", fileID, "content_length", len(fileSaveReq.Content))
-		// [TODO] 保存文件
+		if err := service.WriteAndSyncFile(ctx, stor, fileID, []byte(fileSaveReq.Content)); err != nil {
+			slog.Error("Failed to send file-save request", "err", err)
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to send file-save request"})
+			return
+		}
 		ctx.JSON(http.StatusOK, gin.H{"status": "success", "fileid": fileID, "content_length": len(fileSaveReq.Content)})
 	})
 	router.GET("/file/:fileid", func(ctx *gin.Context) {

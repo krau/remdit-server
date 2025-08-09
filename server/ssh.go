@@ -36,6 +36,7 @@ type ConnHandler struct {
 	fileInfoStor service.FileInfoStorage
 	state        SessionState
 	file         *TempFileHandler
+	serverConn   *ssh.ServerConn
 }
 
 func NewConnHandler(conn net.Conn, conf *ssh.ServerConfig, stor service.FileInfoStorage) *ConnHandler {
@@ -62,6 +63,7 @@ func (h *ConnHandler) Handle(ctx context.Context) error {
 		slog.Error("failed to create SSH server connection", "err", err)
 		return err
 	}
+	h.serverConn = sshConn
 	slog.Info(
 		"SSH connection established",
 		"remote_addr", sshConn.RemoteAddr(),
@@ -176,6 +178,8 @@ func (h *ConnHandler) HandleGlobalReqs(ctx context.Context, reqs <-chan *ssh.Req
 				req.Reply(false, nil)
 				return
 			}
+			service.AddSSHConn(h.file.ID(), h.serverConn)
+			defer service.RemoveSSHConn(h.file.ID())
 			req.Reply(true, nil)
 			h.state = SessionStateListen
 		default:
