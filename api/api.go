@@ -124,7 +124,7 @@ func Serve(ctx context.Context, stor service.FileInfoStorage) {
 	})
 
 	app.Use("/", filesystem.New(filesystem.Config{
-		Root: http.FS(webembed.Static),
+		Root:         http.FS(webembed.Static),
 		NotFoundFile: "index.html", // let the frontend handle
 	}))
 
