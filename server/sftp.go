@@ -10,7 +10,6 @@ import (
 	"remdit-server/config"
 
 	"github.com/pkg/sftp"
-	"golang.org/x/crypto/ssh"
 )
 
 const (
@@ -18,34 +17,33 @@ const (
 )
 
 type TempFileHandler struct {
-	serverConn *ssh.ServerConn
-	randomID   string
-	tempDir    string
-	fileName   string
-	uploaded   bool
+	randomID string
+	tempDir  string
+	fileName string
+	uploaded bool
 }
 
-func (h *TempFileHandler) WriteFile(b []byte) error {
-	if !h.uploaded {
-		return errors.New("file not uploaded yet")
-	}
-	fullPath := filepath.Join(h.tempDir, h.fileName)
-	if err := os.WriteFile(fullPath, b, 0644); err != nil {
-		return fmt.Errorf("failed to write file: %w", err)
-	}
-	slog.Info("sending file-save request", "file", h.fileName, "len", len(b))
-	ok, data, err := h.serverConn.SendRequest("file-save", true, b)
-	if err != nil {
-		slog.Error("failed to send file-save request", "err", err)
-		return fmt.Errorf("failed to send file-save request: %w", err)
-	}
-	slog.Info("file-save SendRequest returned", "ok", ok, "resp_len", len(data))
-	if !ok {
-		slog.Error("file-save request was rejected", "data", data)
-		return errors.New("file-save request was rejected")
-	}
-	return nil
-}
+// func (h *TempFileHandler) WriteFile(b []byte) error {
+// 	if !h.uploaded {
+// 		return errors.New("file not uploaded yet")
+// 	}
+// 	fullPath := filepath.Join(h.tempDir, h.fileName)
+// 	if err := os.WriteFile(fullPath, b, 0644); err != nil {
+// 		return fmt.Errorf("failed to write file: %w", err)
+// 	}
+// 	slog.Info("sending file-save request", "file", h.fileName, "len", len(b))
+// 	ok, data, err := h.serverConn.SendRequest("file-save", true, b)
+// 	if err != nil {
+// 		slog.Error("failed to send file-save request", "err", err)
+// 		return fmt.Errorf("failed to send file-save request: %w", err)
+// 	}
+// 	slog.Info("file-save SendRequest returned", "ok", ok, "resp_len", len(data))
+// 	if !ok {
+// 		slog.Error("file-save request was rejected", "data", data)
+// 		return errors.New("file-save request was rejected")
+// 	}
+// 	return nil
+// }
 
 func (h *TempFileHandler) ID() string {
 	return h.randomID
@@ -60,12 +58,11 @@ func (h *TempFileHandler) Name() string {
 }
 
 // NewTempFileHandler creates a handler with a unique temp directory
-func NewTempFileHandler(id string, serverConn *ssh.ServerConn) *TempFileHandler {
+func NewTempFileHandler(id string) *TempFileHandler {
 	tempDir := filepath.Join(config.C.UploadsDir, id)
 	return &TempFileHandler{
-		randomID:   id,
-		tempDir:    tempDir,
-		serverConn: serverConn,
+		randomID: id,
+		tempDir:  tempDir,
 	}
 }
 

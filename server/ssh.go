@@ -77,7 +77,7 @@ func (h *ConnHandler) Handle(ctx context.Context) error {
 		}
 	}()
 
-	handler := NewTempFileHandler(fileID.String(), sshConn)
+	handler := NewTempFileHandler(fileID.String())
 	h.file = handler
 	defer handler.Close()
 
