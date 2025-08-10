@@ -8,14 +8,14 @@ import (
 	"net"
 	"os"
 	"remdit-server/config"
-	"remdit-server/service"
+	"remdit-server/service/stors/filestor"
 
 	"golang.org/x/crypto/ssh"
 )
 
 type SSHServer struct {
 	conf         *ssh.ServerConfig
-	fileInfoStor service.FileInfoStorage
+	fileInfoStor filestor.FileInfoStorage
 }
 
 func (s *SSHServer) HandleConn(ctx context.Context, conn net.Conn) {
@@ -70,7 +70,7 @@ func NewSSHServerConfig() *ssh.ServerConfig {
 	}
 }
 
-func Serve(ctx context.Context, stor service.FileInfoStorage) error {
+func Serve(ctx context.Context) error {
 	sshConf := NewSSHServerConfig()
 	priKey, err := os.ReadFile(config.C.SSHPrivateKeyPath)
 	if err != nil {
@@ -90,7 +90,7 @@ func Serve(ctx context.Context, stor service.FileInfoStorage) error {
 	defer ln.Close()
 	slog.Info("SSH server listening on", "addr", addr)
 
-	server := &SSHServer{conf: sshConf, fileInfoStor: stor}
+	server := &SSHServer{conf: sshConf, fileInfoStor: filestor.Default()}
 
 	go func() {
 		for {

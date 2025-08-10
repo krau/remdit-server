@@ -8,7 +8,8 @@ import (
 	"math/rand"
 	"net"
 	"remdit-server/config"
-	"remdit-server/service"
+	"remdit-server/service/sshconn"
+	"remdit-server/service/stors/filestor"
 
 	"github.com/google/uuid"
 	"github.com/pkg/sftp"
@@ -20,13 +21,13 @@ type ConnHandler struct {
 	ctx          context.Context
 	conn         net.Conn
 	conf         *ssh.ServerConfig
-	fileInfoStor service.FileInfoStorage
+	fileInfoStor filestor.FileInfoStorage
 	file         *TempFileHandler
 	serverConn   *ssh.ServerConn
 	state        SessionState
 }
 
-func NewConnHandler(ctx context.Context, conn net.Conn, conf *ssh.ServerConfig, stor service.FileInfoStorage) *ConnHandler {
+func NewConnHandler(ctx context.Context, conn net.Conn, conf *ssh.ServerConfig, stor filestor.FileInfoStorage) *ConnHandler {
 	return &ConnHandler{
 		ctx:          ctx,
 		conn:         conn,
@@ -183,8 +184,8 @@ func (h *ConnHandler) HandleGlobalReqs(ctx context.Context, reqs <-chan *ssh.Req
 				req.Reply(false, nil)
 				return
 			}
-			service.AddSSHConn(h.file.ID(), h.serverConn)
-			defer service.RemoveSSHConn(h.file.ID())
+			sshconn.Add(h.file.ID(), h.serverConn)
+			defer sshconn.Remove(h.file.ID())
 			req.Reply(true, nil)
 			h.state = SessionStateListen
 		default:

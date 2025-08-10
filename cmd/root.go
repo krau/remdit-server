@@ -8,7 +8,6 @@ import (
 	"remdit-server/api"
 	"remdit-server/config"
 	"remdit-server/server"
-	"remdit-server/service"
 
 	"github.com/spf13/cobra"
 )
@@ -22,13 +21,11 @@ var rootCmd = &cobra.Command{
 		slog.SetDefault(logger)
 		config.InitConfig()
 	},
-	RunE: func(cmd *cobra.Command, args []string) error {
-		stor := service.NewFileInfoMemoryStorage()
-		go api.Serve(cmd.Context(), stor)
-		if err := server.Serve(cmd.Context(), stor); err != nil {
-			return err
+	Run: func(cmd *cobra.Command, args []string) {
+		go api.Serve(cmd.Context())
+		if err := server.Serve(cmd.Context()); err != nil {
+			panic(err)
 		}
-		return nil
 	},
 }
 
