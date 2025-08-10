@@ -3,8 +3,10 @@ package api
 import (
 	"log/slog"
 	"os"
+	"path/filepath"
 	"remdit-server/service/sshconn"
 	"remdit-server/service/stors/filestor"
+	"strings"
 
 	"github.com/gofiber/contrib/websocket"
 	"github.com/gofiber/fiber/v2"
@@ -110,6 +112,13 @@ func handleGetFile(c *fiber.Ctx) error {
 		"fileid":     fileInfo.ID(),
 		"content":    string(content),
 		"roomexists": hubManager.ExistsHub(fileInfo.ID()),
-		// "language": "plaintext", // [TODO]
+		"language": func() string {
+			ext := filepath.Ext(fileInfo.Name())
+			if ext == "" {
+				return "plaintext"
+			}
+			ext = strings.TrimPrefix(ext, ".")
+			return ext
+		}(),
 	})
 }
