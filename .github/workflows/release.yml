@@ -66,7 +66,6 @@ jobs:
         with:
           repository: "krau/remdit-web"
           path: "frontend"
-          token: ${{ secrets.REMDIT_PAT }} # Personal Access Token with repo scope
 
       - name: Install frontend dependencies
         run: |
