@@ -130,3 +130,10 @@ func (m *HubManager) CleanupHub(room string) {
 		m.mu.Unlock()
 	}
 }
+
+func (m *HubManager) ExistsHub(room string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, exists := m.hubs[room]
+	return exists
+}

@@ -43,6 +43,10 @@ func handleRoomWSConn(conn *websocket.Conn) {
 	for {
 		mt, msg, err := conn.ReadMessage()
 		if err != nil {
+			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+				slog.Info("WebSocket connection closed", "room", room)
+				return
+			}
 			slog.Error("Failed to read message", "err", err)
 			break
 		}
@@ -103,8 +107,9 @@ func handleGetFile(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to read file"})
 	}
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
-		"fileid":  fileInfo.ID(),
-		"content": string(content),
+		"fileid":     fileInfo.ID(),
+		"content":    string(content),
+		"roomexists": hubManager.ExistsHub(fileInfo.ID()),
 		// "language": "plaintext", // [TODO]
 	})
 }
