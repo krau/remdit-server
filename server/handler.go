@@ -1,7 +1,9 @@
 package server
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"math/rand"
 	"os"
@@ -9,6 +11,7 @@ import (
 	"remdit-server/config"
 	"remdit-server/service/stors/filestor"
 	"strings"
+	"time"
 
 	"github.com/gofiber/contrib/websocket"
 	"github.com/gofiber/fiber/v2"
@@ -28,6 +31,11 @@ func handleRoomWSUpgrade(c *fiber.Ctx) error {
 		fileInfo := filestor.Get(c.Context(), fileID.String())
 		if fileInfo == nil {
 			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "file not found"})
+		}
+		hub := hubManager.GetHub(room)
+		if hub == nil || hub.sessionConn == nil {
+			slog.Error("No editing hub found for room", "room", room)
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "editing hub not found"})
 		}
 		slog.Info("WebSocket connection request", "room", room, "fileid", fileID)
 		return c.Next()
@@ -184,7 +192,7 @@ func handleSessionWSUpgrade(c *fiber.Ctx) error {
 func handleSessionWSConn(conn *websocket.Conn) {
 	fileInfo := conn.Locals("fileInfo").(filestor.File)
 	if fileInfo == nil {
-		slog.Error("File info not found in session WS connection")
+		slog.Error("File info not found in session WS connection", "fileid", conn.Params("sessionid"))
 		conn.Close()
 		return
 	}
@@ -204,11 +212,32 @@ func handleSessionWSConn(conn *websocket.Conn) {
 		slog.Info("Session WebSocket disconnected and cleaned up", "sessionid", sessionID)
 	}()
 
+	conn.SetReadDeadline(time.Now().Add(50 * time.Second))
+	conn.SetPongHandler(func(appData string) error {
+		conn.SetReadDeadline(time.Now().Add(50 * time.Second))
+		return nil
+	})
+	ticker := time.NewTicker(25 * time.Second)
+	defer ticker.Stop()
+
+	go func() {
+		for range ticker.C {
+			if err := conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(10*time.Second)); err != nil {
+				slog.Error("Failed to send ping", "sessionid", sessionID, "err", err)
+				conn.Close()
+				return
+			}
+		}
+	}()
+
 	for {
 		var msg map[string]any
 		err := conn.ReadJSON(&msg)
 		if err != nil {
-			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+			if websocket.IsCloseError(err,
+				websocket.CloseNormalClosure,
+				websocket.CloseGoingAway) ||
+				errors.Is(err, io.ErrUnexpectedEOF) { // client closed connection
 				slog.Info("Session WebSocket connection closed", "sessionid", sessionID)
 				return
 			}
