@@ -36,6 +36,7 @@ func Serve(ctx context.Context) {
 			"127.0.0.1",
 		},
 		ProxyHeader: fiber.HeaderXForwardedFor,
+		BodyLimit:   10 * 1024 * 1024,
 	})
 	loggerCfg := logger.ConfigDefault
 	loggerCfg.Format = "${time} | ${status} | ${latency} | ${ip} | ${method} | ${path} | ${queryParams} | ${error}\n"
