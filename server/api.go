@@ -1,4 +1,4 @@
-package api
+package server
 
 import (
 	"context"
@@ -38,7 +38,9 @@ func Serve(ctx context.Context) {
 
 	rg.Get("/socket/:room", handleRoomWSUpgrade)
 	rg.Get("/socket/:room", websocket.New(handleRoomWSConn))
-
+	rg.Get("/session/:sessionid", handleSessionWSUpgrade)
+	rg.Get("/session/:sessionid", websocket.New(handleSessionWSConn))
+	rg.Post("/session", handleCreateSession)
 	rg.Use("/file/:fileid", handleFileMiddleware)
 	rg.Put("/file/:fileid", handlePutFile)
 	rg.Get("/file/:fileid", handleGetFile)

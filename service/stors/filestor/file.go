@@ -5,54 +5,79 @@ import (
 	"fmt"
 	"os"
 	"sync"
-	"time"
-
-	"github.com/duke-git/lancet/v2/retry"
-	"golang.org/x/crypto/ssh"
 )
 
 type FileInfoStorage interface {
-	Save(ctx context.Context, fileID string, info FileInfo) error
-	Get(ctx context.Context, fileID string) FileInfo
+	Save(ctx context.Context, fileID string, f File) error
+	Get(ctx context.Context, fileID string) File
 	Delete(ctx context.Context, fileID string) error
 }
 
-type FileInfo interface {
+type File interface {
 	ID() string
 	Path() string
 	Name() string
+	Close() error
 }
 
-type FileInfoMemoryStorage struct {
-	data map[string]FileInfo
+type fileImpl struct {
+	id   string
+	path string
+	name string
+}
+
+func (f *fileImpl) ID() string {
+	return f.id
+}
+func (f *fileImpl) Path() string {
+	return f.path
+}
+func (f *fileImpl) Name() string {
+	return f.name
+}
+
+func (f *fileImpl) Close() error {
+	return os.RemoveAll(f.path)
+}
+
+func NewFileInfo(id, path, name string) File {
+	return &fileImpl{
+		id:   id,
+		path: path,
+		name: name,
+	}
+}
+
+type FileMemoryStorage struct {
+	data map[string]File
 	mu   sync.RWMutex
 }
 
-var _ FileInfoStorage = (*FileInfoMemoryStorage)(nil)
+var _ FileInfoStorage = (*FileMemoryStorage)(nil)
 
-var defaultStor FileInfoStorage = NewFileInfoMemoryStorage()
+var defaultStor FileInfoStorage = NewFileMemoryStorage()
 
 func Default() FileInfoStorage {
 	if defaultStor == nil {
-		defaultStor = NewFileInfoMemoryStorage()
+		defaultStor = NewFileMemoryStorage()
 	}
 	return defaultStor
 }
 
-func NewFileInfoMemoryStorage() *FileInfoMemoryStorage {
-	return &FileInfoMemoryStorage{
-		data: make(map[string]FileInfo),
+func NewFileMemoryStorage() *FileMemoryStorage {
+	return &FileMemoryStorage{
+		data: make(map[string]File),
 	}
 }
 
-func (s *FileInfoMemoryStorage) Save(ctx context.Context, fileID string, info FileInfo) error {
+func (s *FileMemoryStorage) Save(ctx context.Context, fileID string, f File) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.data[fileID] = info
+	s.data[fileID] = f
 	return nil
 }
 
-func (s *FileInfoMemoryStorage) Get(ctx context.Context, fileID string) FileInfo {
+func (s *FileMemoryStorage) Get(ctx context.Context, fileID string) File {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	info, exists := s.data[fileID]
@@ -62,21 +87,24 @@ func (s *FileInfoMemoryStorage) Get(ctx context.Context, fileID string) FileInfo
 	return info
 }
 
-func (s *FileInfoMemoryStorage) Delete(ctx context.Context, fileID string) error {
+func (s *FileMemoryStorage) Delete(ctx context.Context, fileID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.data, fileID)
+	if file, exists := s.data[fileID]; exists {
+		file.Close()
+		delete(s.data, fileID)
+	}
 	return nil
 }
 
-func Save(ctx context.Context, fileID string, info FileInfo) error {
-	if info == nil {
-		return fmt.Errorf("file info cannot be nil")
+func Save(ctx context.Context, fileID string, f File) error {
+	if f == nil {
+		return fmt.Errorf("file cannot be nil")
 	}
-	return defaultStor.Save(ctx, fileID, info)
+	return defaultStor.Save(ctx, fileID, f)
 }
 
-func Get(ctx context.Context, fileID string) FileInfo {
+func Get(ctx context.Context, fileID string) File {
 	if fileID == "" {
 		return nil
 	}
@@ -88,26 +116,4 @@ func Delete(ctx context.Context, fileID string) error {
 		return fmt.Errorf("file ID cannot be empty")
 	}
 	return defaultStor.Delete(ctx, fileID)
-}
-
-// 将文件写入到本地并同步给客户端
-func WriteAndSyncFile(ctx context.Context, stor FileInfoStorage, fileID string, conn *ssh.ServerConn, content []byte) error {
-	fileInfo := stor.Get(ctx, fileID)
-	if fileInfo == nil {
-		return fmt.Errorf("file not found")
-	}
-	if err := os.WriteFile(fileInfo.Path(), content, 0644); err != nil {
-		return fmt.Errorf("failed to write file: %w", err)
-	}
-	return retry.Retry(func() error {
-		ok, _, err := conn.SendRequest("file-save", true, content)
-		if err != nil {
-			return err
-		}
-		if !ok {
-			return fmt.Errorf("file-save request was rejected")
-		}
-		return nil
-	}, retry.Context(ctx),
-		retry.RetryWithLinearBackoff(time.Microsecond*50))
 }

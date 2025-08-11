@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"remdit-server/api"
 	"remdit-server/config"
 	"remdit-server/server"
 
@@ -22,10 +21,7 @@ var rootCmd = &cobra.Command{
 		config.InitConfig()
 	},
 	Run: func(cmd *cobra.Command, args []string) {
-		go api.Serve(cmd.Context())
-		if err := server.Serve(cmd.Context()); err != nil {
-			panic(err)
-		}
+		server.Serve(cmd.Context())
 	},
 }
 

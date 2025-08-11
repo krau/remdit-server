@@ -1,4 +1,4 @@
-package api
+package server
 
 import (
 	"log/slog"
@@ -17,7 +17,7 @@ type WSEditingClient struct {
 func NewWSEditingClient(conn *websocket.Conn, hub *EditingHub) *WSEditingClient {
 	c := &WSEditingClient{
 		conn: conn,
-		send: make(chan []byte, 16),
+		send: make(chan []byte, 64),
 		hub:  hub,
 	}
 	go c.writePump()
@@ -43,12 +43,14 @@ func (c *WSEditingClient) Close() {
 }
 
 type EditingHub struct {
-	mu      sync.Mutex
-	clients map[*WSEditingClient]struct{}
+	mu          sync.Mutex
+	clients     map[*WSEditingClient]struct{} // 前端 ws 连接
+	sessionConn *websocket.Conn               // 客户端程序连接
 }
 
-func NewEditingHub() *EditingHub {
-	return &EditingHub{clients: make(map[*WSEditingClient]struct{})}
+// 客户端必须先建立连接, 才能创建 EditingHub
+func NewEditingHub(session *websocket.Conn) *EditingHub {
+	return &EditingHub{clients: make(map[*WSEditingClient]struct{}), sessionConn: session}
 }
 
 func (h *EditingHub) AddClientConn(conn *websocket.Conn) *WSEditingClient {
@@ -72,15 +74,11 @@ func (h *EditingHub) BroadcastMessage(msg []byte) {
 		clients = append(clients, c)
 	}
 	h.mu.Unlock()
-
 	for _, c := range clients {
 		select {
 		case c.send <- msg:
-			// ok
 		default:
-			// send channel 已满，认为客户端太慢或死掉，移除它
-			slog.Warn("client send channel full, removing client")
-			c.Close() // 触发移除
+			c.Close()
 		}
 	}
 }
@@ -106,9 +104,7 @@ func (m *HubManager) GetHub(room string) *EditingHub {
 	if hub, exists := m.hubs[room]; exists {
 		return hub
 	}
-	hub := NewEditingHub()
-	m.hubs[room] = hub
-	return hub
+	return nil
 }
 
 func (m *HubManager) CleanupHub(room string) {

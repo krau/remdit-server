@@ -1,197 +1,192 @@
 package server
 
 import (
-	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"math/rand"
-	"net"
+	"os"
+	"path/filepath"
 	"remdit-server/config"
-	"remdit-server/service/sshconn"
 	"remdit-server/service/stors/filestor"
+	"strings"
 
+	"github.com/gofiber/contrib/websocket"
+	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
-	"github.com/pkg/sftp"
-	"go.uber.org/multierr"
-	"golang.org/x/crypto/ssh"
 )
 
-type ConnHandler struct {
-	ctx          context.Context
-	conn         net.Conn
-	conf         *ssh.ServerConfig
-	fileInfoStor filestor.FileInfoStorage
-	file         *TempFileHandler
-	serverConn   *ssh.ServerConn
-	state        SessionState
-}
-
-func NewConnHandler(ctx context.Context, conn net.Conn, conf *ssh.ServerConfig, stor filestor.FileInfoStorage) *ConnHandler {
-	return &ConnHandler{
-		ctx:          ctx,
-		conn:         conn,
-		conf:         conf,
-		fileInfoStor: stor,
-	}
-}
-
-func (h *ConnHandler) Close() error {
-	errs := make([]error, 0)
-	if h.file != nil {
-		if err := h.file.Remove(); err != nil {
-			errs = append(errs, fmt.Errorf("failed to close temp file handler: %w", err))
+func handleRoomWSUpgrade(c *fiber.Ctx) error {
+	if websocket.IsWebSocketUpgrade(c) {
+		room := c.Params("room")
+		if room == "" {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "room is required"})
 		}
-	}
-	if h.file != nil && h.fileInfoStor != nil {
-		if err := h.fileInfoStor.Delete(context.Background(), h.file.ID()); err != nil {
-			errs = append(errs, fmt.Errorf("failed to delete file info: %w", err))
-		}
-	}
-	if h.serverConn != nil {
-		if err := h.serverConn.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("failed to close SSH server connection: %w", err))
-		}
-	}
-	if h.conn != nil {
-		if err := h.conn.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("failed to close connection: %w", err))
-		}
-	}
-
-	return multierr.Combine(errs...)
-}
-
-func (h *ConnHandler) Handle(ctx context.Context) error {
-	sshConn, chans, reqs, err := ssh.NewServerConn(h.conn, h.conf)
-	if err != nil {
-		slog.Error("failed to create SSH server connection", "err", err)
-		return err
-	}
-	h.serverConn = sshConn
-	slog.Info(
-		"SSH connection established",
-		"remote_addr", sshConn.RemoteAddr(),
-		"user", sshConn.User(),
-	)
-	h.state = SessionStateNone
-
-	fileID := uuid.New()
-
-	handler := NewTempFileHandler(fileID.String())
-	h.file = handler
-
-	go h.HandleGlobalReqs(ctx, reqs)
-
-	for newChan := range chans {
-		if newChan.ChannelType() != "session" {
-			newChan.Reject(ssh.UnknownChannelType, "only session channels are supported")
-			continue
-		}
-		if h.state != SessionStateNone {
-			newChan.Reject(ssh.Prohibited, "session already in progress")
-			continue
-		}
-		channel, requests, err := newChan.Accept()
+		fileID, err := uuid.Parse(room)
 		if err != nil {
-			slog.Error("failed to accept channel", "err", err)
-			continue
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid room format"})
 		}
-
-		go func(in <-chan *ssh.Request) {
-			defer channel.Close()
-			for req := range in {
-				h.HandleChannelReq(req, channel)
-			}
-		}(requests)
+		fileInfo := filestor.Get(c.Context(), fileID.String())
+		if fileInfo == nil {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "file not found"})
+		}
+		slog.Info("WebSocket connection request", "room", room, "fileid", fileID)
+		return c.Next()
 	}
-	slog.Info("SSH session ended", "remote_addr", sshConn.RemoteAddr(), "user", sshConn.User())
-	return nil
+	return fiber.ErrUpgradeRequired
 }
 
-func (h *ConnHandler) HandleChannelReq(req *ssh.Request, channel ssh.Channel) {
-	switch req.Type {
-	case "subsystem":
-		if h.state != SessionStateNone {
-			req.Reply(false, nil)
-			return
-		}
-		var payload struct {
-			Name string
-		}
-		if err := ssh.Unmarshal(req.Payload, &payload); err != nil {
-			slog.Error("failed to unmarshal subsystem request", "err", err)
-			req.Reply(false, nil)
-			return
-		}
-		if payload.Name != "sftp" {
-			req.Reply(false, nil)
-			return
-		}
-
-		if err := req.Reply(true, nil); err != nil {
-			slog.Error("failed to reply to subsystem request", "err", err)
-			return
-		}
-
-		sftpHandlers := sftp.Handlers{FileGet: h.file, FilePut: h.file, FileCmd: h.file, FileList: h.file}
-		requestServer := sftp.NewRequestServer(channel, sftpHandlers)
-		defer requestServer.Close()
-		slog.Info("starting SFTP server for client", "remote_addr", h.serverConn.RemoteAddr(), "user", h.serverConn.User())
-
-		if err := requestServer.Serve(); err != nil {
-			if err != io.EOF {
-				slog.Error("SFTP server error", "err", err)
-			}
-		}
-		slog.Info("SFTP server session ended", "remote_addr", h.serverConn.RemoteAddr(), "user", h.serverConn.User())
-
-		h.state = SessionStateFileUpload
-		req.Reply(true, nil)
+func handleRoomWSConn(conn *websocket.Conn) {
+	room := conn.Params("room")
+	hub := hubManager.GetHub(room)
+	if hub == nil {
+		slog.Error("No editing hub found for room", "room", room)
+		conn.Close()
 		return
-	default:
-		if req.WantReply {
-			req.Reply(false, nil)
-		}
 	}
-}
+	client := hub.AddClientConn(conn)
+	defer func() {
+		client.Close()
+		hubManager.CleanupHub(room)
+	}()
 
-func (h *ConnHandler) HandleGlobalReqs(ctx context.Context, reqs <-chan *ssh.Request) {
-	for req := range reqs {
-		switch req.Type {
-		case "file-info":
-			if h.state != SessionStateFileUpload {
-				slog.Warn("file-info request received in wrong state", "state", h.state)
-				req.Reply(false, nil)
-				continue
-			}
-
-			payload := &FileInfoMessagePayload{
-				FileID:  h.file.ID(),
-				EditUrl: fmt.Sprintf("%s/edit/%s", config.C.ServerURLs[rand.Intn(len(config.C.ServerURLs))], h.file.ID()),
-			}
-
-			req.Reply(true, ssh.Marshal(payload))
-			h.state = SessionStateFileInfo
-		case "listen":
-			if h.state != SessionStateFileInfo {
-				slog.Warn("listen request received in wrong state", "state", h.state)
-				req.Reply(false, nil)
-				continue
-			}
-			if err := h.fileInfoStor.Save(context.Background(), h.file.ID(), h.file); err != nil {
-				slog.Error("failed to save file info", "err", err)
-				req.Reply(false, nil)
+	for {
+		mt, msg, err := conn.ReadMessage()
+		if err != nil {
+			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+				slog.Info("WebSocket connection closed", "room", room)
 				return
 			}
-			sshconn.Add(h.file.ID(), h.serverConn)
-			defer sshconn.Remove(h.file.ID())
-			req.Reply(true, nil)
-			h.state = SessionStateListen
-		default:
-			if req.WantReply {
-				req.Reply(false, nil)
-			}
+			slog.Error("Failed to read message", "err", err)
+			break
 		}
+
+		if mt != websocket.BinaryMessage {
+			continue
+		}
+		hub.BroadcastMessage(msg)
 	}
+}
+
+func handleFileMiddleware(c *fiber.Ctx) error {
+	fileID := c.Params("fileid")
+	if fileID == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "fileid is required"})
+	}
+	if _, err := uuid.Parse(fileID); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid fileid format"})
+	}
+	fileInfo := filestor.Get(c.Context(), fileID)
+	if fileInfo == nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "file not found"})
+	}
+	c.Locals("fileInfo", fileInfo)
+	return c.Next()
+}
+
+func handlePutFile(c *fiber.Ctx) error {
+	var fileSaveReq FileSaveRequest
+	if err := c.BodyParser(&fileSaveReq); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "content is required"})
+	}
+	fileID := c.Params("fileid")
+	fileInfo := c.Locals("fileInfo").(filestor.File)
+	if fileInfo == nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "file not found"})
+	}
+	hub := hubManager.GetHub(fileID)
+	if hub == nil {
+		slog.Error("No editing hub found for file", "fileid", fileID)
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "editing hub not found"})
+	}
+	// [TODO]
+	slog.Info("Saving file", "fileid", fileID, "content_length", len(fileSaveReq.Content))
+	// if err := filestor.WriteAndSyncFile(c.Context(), filestor.Default(), fileID, []byte(fileSaveReq.Content)); err != nil {
+	// 	slog.Error("Failed to write file", "fileid", fileID, "err", err)
+	// 	return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to save file"})
+	// }
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{"message": "file saved successfully"})
+}
+
+func handleGetFile(c *fiber.Ctx) error {
+	fileInfo := c.Locals("fileInfo").(filestor.File)
+	if fileInfo == nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "file not found"})
+	}
+	content, err := os.ReadFile(fileInfo.Path())
+	if err != nil {
+		slog.Error("Failed to read file", "fileid", fileInfo.ID(), "err", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to read file"})
+	}
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"fileid":     fileInfo.ID(),
+		"content":    string(content),
+		"roomexists": hubManager.ExistsHub(fileInfo.ID()),
+		"filename":   fileInfo.Name(),
+		"language": func() string {
+			ext := filepath.Ext(fileInfo.Name())
+			if ext == "" {
+				return "plaintext"
+			}
+			ext = strings.TrimPrefix(ext, ".")
+			if lang, ok := extToLang[strings.ToLower(ext)]; ok {
+				return lang
+			}
+			return "plaintext"
+		}(),
+	})
+}
+
+func handleSessionWSUpgrade(c *fiber.Ctx) error {
+	if websocket.IsWebSocketUpgrade(c) {
+		sessionid := c.Params("sessionid")
+		if sessionid == "" {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "sessionid is required"})
+		}
+		fileID, err := uuid.Parse(sessionid)
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid sessionid format"})
+		}
+		fileInfo := filestor.Get(c.Context(), fileID.String())
+		if fileInfo == nil {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "file not found"})
+		}
+		c.Locals("fileInfo", fileInfo)
+		slog.Info("WebSocket connection request", "sessionid", sessionid, "fileid", fileID)
+		return c.Next()
+	}
+	return fiber.ErrUpgradeRequired
+}
+
+func handleSessionWSConn(conn *websocket.Conn) {
+	// [TODO]
+	fileInfo := conn.Locals("fileInfo").(filestor.File)
+	if fileInfo == nil {
+		slog.Error("File info not found in session WS connection")
+		conn.Close()
+		return
+	}
+}
+
+func handleCreateSession(c *fiber.Ctx) error {
+	file, err := c.FormFile("document")
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "file is required"})
+	}
+	if file.Size > config.MaxFileSize {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "file size exceeds limit"})
+	}
+	fileID := uuid.New().String()
+	filePath := filepath.Join(config.C.UploadsDir, fileID, file.Filename)
+	if err := c.SaveFile(file, filePath); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to save file"})
+	}
+	slog.Info("File uploaded", "fileid", fileID, "filename", file.Filename, "size", file.Size)
+	if err := filestor.Save(c.Context(), fileID, filestor.NewFileInfo(fileID, filePath, file.Filename)); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to save file info"})
+	}
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"sessionid": fileID,
+		"editurl":   fmt.Sprintf("%s/edit/%s", config.C.ServerURLs[rand.Intn(len(config.C.ServerURLs))], fileID),
+	})
+
 }
