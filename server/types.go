@@ -1,15 +1,16 @@
 package server
 
-type FileInfoMessagePayload struct {
-	FileID  string
-	EditUrl string
+type FileSaveRequest struct {
+	Content string `json:"content" binding:"required"`
 }
 
-type SessionState uint
+type SaveResultMessage struct {
+	Type    string `json:"type"`
+	Success bool   `json:"success"`
+	Reason  string `json:"reason,omitempty"`
+}
 
-const (
-	SessionStateNone SessionState = iota
-	SessionStateFileUpload
-	SessionStateFileInfo
-	SessionStateListen
-)
+type SaveResult struct {
+	Success bool
+	Reason  string
+}

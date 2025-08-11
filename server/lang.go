@@ -1,4 +1,4 @@
-package api
+package server
 
 var extToLang = map[string]string{
 	"abap": "abap",
