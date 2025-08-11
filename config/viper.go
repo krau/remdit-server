@@ -14,6 +14,8 @@ type Config struct {
 	APIRPM     int      `toml:"api_rpm" mapstructure:"api_rpm"`
 	UploadsDir string   `toml:"uploads_dir" mapstructure:"uploads_dir"`
 	ServerURLs []string `toml:"server_urls" mapstructure:"server_urls"`
+	APIKeyAuth bool     `toml:"api_key_auth" mapstructure:"api_key_auth"`
+	APIKeys    []string `toml:"api_keys" mapstructure:"api_keys"`
 }
 
 var C *Config
