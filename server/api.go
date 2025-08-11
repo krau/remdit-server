@@ -26,6 +26,7 @@ var (
 	hubManager = NewHubManager()
 )
 
+
 func Serve(ctx context.Context) {
 	app := fiber.New(fiber.Config{
 		JSONEncoder:             sonic.Marshal,

@@ -9,13 +9,14 @@ import (
 )
 
 type Config struct {
-	APIHost    string   `toml:"api_host" mapstructure:"api_host"`
-	APIPort    int      `toml:"api_port" mapstructure:"api_port"`
-	APIRPM     int      `toml:"api_rpm" mapstructure:"api_rpm"`
-	UploadsDir string   `toml:"uploads_dir" mapstructure:"uploads_dir"`
-	ServerURLs []string `toml:"server_urls" mapstructure:"server_urls"`
-	APIKeyAuth bool     `toml:"api_key_auth" mapstructure:"api_key_auth"`
-	APIKeys    []string `toml:"api_keys" mapstructure:"api_keys"`
+	APIHost             string   `toml:"api_host" mapstructure:"api_host"`
+	APIPort             int      `toml:"api_port" mapstructure:"api_port"`
+	APIRPM              int      `toml:"api_rpm" mapstructure:"api_rpm"`
+	UploadsDir          string   `toml:"uploads_dir" mapstructure:"uploads_dir"`
+	ServerURLs          []string `toml:"server_urls" mapstructure:"server_urls"`
+	APIKeyAuth          bool     `toml:"api_key_auth" mapstructure:"api_key_auth"`
+	APIKeys             []string `toml:"api_keys" mapstructure:"api_keys"`
+	SessionTimeoutHours int      `toml:"session_timeout_hours" mapstructure:"session_timeout_hours"`
 }
 
 var C *Config
@@ -27,8 +28,8 @@ func InitConfig() {
 	viper.SetConfigFile("config.toml")
 	viper.AutomaticEnv()
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
-
 	viper.SetDefault("api_rpm", 39)
+	viper.SetDefault("session_timeout_hours", 6)
 
 	if err := viper.ReadInConfig(); err != nil {
 		slog.Error("failed to read config file", "err", err)

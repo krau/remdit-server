@@ -18,10 +18,21 @@ type EditingHub struct {
 	sessionConn    *websocket.Conn               // 客户端程序连接
 	saveResultChan chan SaveResult
 	chMu           sync.Mutex
+	lastActiveAt   time.Time
 }
 
 func NewEditingHub(id string, sessionConn *websocket.Conn) *EditingHub {
-	return &EditingHub{clients: make(map[*WSEditingClient]struct{}), id: id, sessionConn: sessionConn}
+	now := time.Now()
+	return &EditingHub{
+		clients:      make(map[*WSEditingClient]struct{}),
+		id:           id,
+		sessionConn:  sessionConn,
+		lastActiveAt: now,
+	}
+}
+
+func (h *EditingHub) updateLastActive() {
+	h.lastActiveAt = time.Now()
 }
 
 func (h *EditingHub) AddClientConn(conn *websocket.Conn) *WSEditingClient {
@@ -39,6 +50,7 @@ func (h *EditingHub) RemoveClientConn(c *WSEditingClient) {
 }
 
 func (h *EditingHub) BroadcastMessage(msg []byte) {
+	h.updateLastActive()
 	h.chMu.Lock()
 	clients := make([]*WSEditingClient, 0, len(h.clients))
 	for c := range h.clients {
@@ -58,6 +70,7 @@ func (h *EditingHub) BroadcastMessage(msg []byte) {
 }
 
 func (h *EditingHub) NotifySessionSave(content string) error {
+	h.updateLastActive()
 	if h.sessionConn == nil {
 		return fmt.Errorf("no session connection available")
 	}
