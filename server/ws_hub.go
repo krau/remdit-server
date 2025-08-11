@@ -57,12 +57,10 @@ func (h *EditingHub) BroadcastMessage(msg []byte) {
 	}
 }
 
-// 通知客户端保存文件
 func (h *EditingHub) NotifySessionSave(content string) error {
 	if h.sessionConn == nil {
 		return fmt.Errorf("no session connection available")
 	}
-	// 发送保存通知给客户端
 	saveMsg := map[string]any{
 		"type":    "save",
 		"content": content,
@@ -70,7 +68,6 @@ func (h *EditingHub) NotifySessionSave(content string) error {
 	return h.sessionConn.WriteJSON(saveMsg)
 }
 
-// 处理保存结果
 func (h *EditingHub) HandleSaveResult(success bool, reason string) {
 	h.chMu.Lock()
 	if h.saveResultChan == nil {
@@ -83,9 +80,7 @@ func (h *EditingHub) HandleSaveResult(success bool, reason string) {
 	}
 }
 
-// 等待客户端保存结果（带超时）
 func (h *EditingHub) WaitSaveResult() (bool, string, error) {
-	// 等待结果，设置10秒超时
 	h.chMu.Lock()
 	if h.saveResultChan == nil {
 		h.saveResultChan = make(chan SaveResult, 1)

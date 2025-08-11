@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"sync"
+
+	"go.uber.org/multierr"
 )
 
 type FileInfoStorage interface {
@@ -21,9 +23,10 @@ type File interface {
 }
 
 type fileImpl struct {
-	id   string
-	path string
-	name string
+	id         string
+	path       string
+	name       string
+	removeDirs []string
 }
 
 func (f *fileImpl) ID() string {
@@ -37,14 +40,36 @@ func (f *fileImpl) Name() string {
 }
 
 func (f *fileImpl) Remove() error {
-	return os.RemoveAll(f.path)
+	if f.path == "" {
+		return fmt.Errorf("file path is empty")
+	}
+	if err := os.RemoveAll(f.path); err != nil {
+		return fmt.Errorf("failed to remove file %s: %w", f.path, err)
+	}
+	var errs error
+	if len(f.removeDirs) > 0 {
+		for _, dir := range f.removeDirs {
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				errs = multierr.Append(errs, fmt.Errorf("failed to read directory %s: %w", dir, err))
+				continue
+			}
+			if len(entries) == 0 {
+				if err := os.Remove(dir); err != nil {
+					errs = multierr.Append(errs, fmt.Errorf("failed to remove empty directory %s: %w", dir, err))
+				}
+			}
+		}
+	}
+	return errs
 }
 
-func NewFile(id, path, name string) File {
+func NewFile(id, path, name string, removeDirs ...string) File {
 	return &fileImpl{
-		id:   id,
-		path: path,
-		name: name,
+		id:         id,
+		path:       path,
+		name:       name,
+		removeDirs: removeDirs,
 	}
 }
 

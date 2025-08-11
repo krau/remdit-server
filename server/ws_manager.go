@@ -26,7 +26,6 @@ func (m *HubManager) GetHub(room string) *EditingHub {
 	return nil
 }
 
-// 创建Hub
 func (m *HubManager) CreateHub(room string, sessionConn *websocket.Conn) (*EditingHub, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -47,11 +46,9 @@ func (m *HubManager) CleanupSession(sessionID string) {
 		m.mu.Unlock()
 		return
 	}
-	// 先从管理器中移除hub
 	delete(m.hubs, sessionID)
 	m.mu.Unlock()
 
-	// 执行session清理（包括文件删除）
 	hub.Cleanup()
 	slog.Info("Completely cleaned up session", "sessionid", sessionID)
 }

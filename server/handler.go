@@ -99,19 +99,19 @@ func handlePutFile(c *fiber.Ctx) error {
 	}
 
 	slog.Info("Saving file", "fileid", fileID, "content_length", len(fileSaveReq.Content))
-	// 保存文件到本地
+	// Save the file content to server
 	if err := os.WriteFile(fileInfo.Path(), []byte(fileSaveReq.Content), 0644); err != nil {
 		slog.Error("Failed to write file", "fileid", fileID, "err", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to save file"})
 	}
 
-	// 通知客户端保存文件
+	// notify the client about the save
 	if err := hub.NotifySessionSave(fileSaveReq.Content); err != nil {
 		slog.Warn("Failed to notify session about file save", "fileid", fileID, "err", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to notify client"})
 	}
 
-	// 等待客户端确认保存结果
+	// wait for confirmation from the client
 	success, reason, err := hub.WaitSaveResult()
 	if err != nil {
 		slog.Error("Failed to get save confirmation from client", "fileid", fileID, "err", err)
@@ -215,12 +215,11 @@ func handleSessionWSConn(conn *websocket.Conn) {
 			slog.Error("Failed to read session message", "err", err)
 			break
 		}
-		// 处理客户端返回的保存结果
+		// handle save confirmation from client
 		if msgType, ok := msg["type"].(string); ok && msgType == "save_result" {
 			success, _ := msg["success"].(bool)
 			reason, _ := msg["reason"].(string)
 
-			// 通知Hub处理保存结果
 			hub.HandleSaveResult(success, reason)
 
 			if success {
@@ -250,7 +249,14 @@ func handleCreateSession(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to save file"})
 	}
 	slog.Info("File uploaded", "fileid", fileID, "filename", file.Filename, "size", file.Size)
-	if err := filestor.Save(c.Context(), fileID, filestor.NewFile(fileID, filePath, file.Filename)); err != nil {
+	if err := filestor.Save(c.Context(),
+		fileID,
+		filestor.NewFile(fileID,
+			filePath,
+			file.Filename,
+			filepath.Join(config.C.UploadsDir, fileID),
+		),
+	); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to save file info"})
 	}
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
