@@ -8,6 +8,7 @@ import (
 	"os"
 	"remdit-server/config"
 	"remdit-server/webembed"
+	"time"
 
 	"github.com/bytedance/sonic"
 	"github.com/gofiber/fiber/v2"
@@ -26,7 +27,6 @@ func Serve(ctx context.Context) {
 	app := fiber.New(fiber.Config{
 		JSONEncoder: sonic.Marshal,
 		JSONDecoder: sonic.Unmarshal,
-		Prefork:     false,
 	})
 	loggerCfg := logger.ConfigDefault
 	loggerCfg.Format = "${time} | ${status} | ${latency} | ${ip} | ${method} | ${path} | ${queryParams} | ${error}\n"
@@ -59,7 +59,7 @@ func Serve(ctx context.Context) {
 	}()
 	<-ctx.Done()
 	slog.Info("API server is shutting down")
-	if err := app.Shutdown(); err != nil {
+	if err := app.ShutdownWithTimeout(time.Second * 10); err != nil {
 		slog.Error("Failed to gracefully shutdown API server", "err", err)
 	} else {
 		slog.Info("API server shutdown successfully")
