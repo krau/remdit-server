@@ -131,6 +131,11 @@ func handleGetFile(c *fiber.Ctx) error {
 	if fileInfo == nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "file not found"})
 	}
+	hub := hubManager.GetHub(fileInfo.ID())
+	if hub == nil {
+		slog.Error("No editing hub found for file", "fileid", fileInfo.ID())
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "editing hub not found"})
+	}
 	content, err := os.ReadFile(fileInfo.Path())
 	if err != nil {
 		slog.Error("Failed to read file", "fileid", fileInfo.ID(), "err", err)
@@ -139,7 +144,7 @@ func handleGetFile(c *fiber.Ctx) error {
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"fileid":     fileInfo.ID(),
 		"content":    string(content),
-		"roomexists": hubManager.ExistsHub(fileInfo.ID()),
+		"roomexists": !hub.IsEmpty(),
 		"filename":   fileInfo.Name(),
 		"language": func() string {
 			ext := filepath.Ext(fileInfo.Name())
@@ -245,7 +250,7 @@ func handleCreateSession(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to save file"})
 	}
 	slog.Info("File uploaded", "fileid", fileID, "filename", file.Filename, "size", file.Size)
-	if err := filestor.Save(c.Context(), fileID, filestor.NewFileInfo(fileID, filePath, file.Filename)); err != nil {
+	if err := filestor.Save(c.Context(), fileID, filestor.NewFile(fileID, filePath, file.Filename)); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to save file info"})
 	}
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{

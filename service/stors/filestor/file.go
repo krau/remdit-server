@@ -17,7 +17,7 @@ type File interface {
 	ID() string
 	Path() string
 	Name() string
-	Close() error
+	Remove() error
 }
 
 type fileImpl struct {
@@ -36,11 +36,11 @@ func (f *fileImpl) Name() string {
 	return f.name
 }
 
-func (f *fileImpl) Close() error {
+func (f *fileImpl) Remove() error {
 	return os.RemoveAll(f.path)
 }
 
-func NewFileInfo(id, path, name string) File {
+func NewFile(id, path, name string) File {
 	return &fileImpl{
 		id:   id,
 		path: path,
@@ -91,7 +91,7 @@ func (s *FileMemoryStorage) Delete(ctx context.Context, fileID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if file, exists := s.data[fileID]; exists {
-		file.Close()
+		file.Remove()
 		delete(s.data, fileID)
 	}
 	return nil

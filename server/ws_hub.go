@@ -114,12 +114,12 @@ func (h *EditingHub) Cleanup() {
 	if h.sessionConn != nil {
 		h.sessionConn.Close()
 	}
-	// 删除文件
 	if err := filestor.Delete(context.Background(), h.id); err != nil {
 		slog.Error("Failed to delete file", "fileid", h.id, "err", err)
 	} else {
 		slog.Info("Cleaned up session files", "fileid", h.id)
 	}
+
 }
 
 func (h *EditingHub) IsEmpty() bool {
