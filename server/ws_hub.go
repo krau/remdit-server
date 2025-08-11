@@ -103,14 +103,19 @@ func (h *EditingHub) WaitSaveResult() (bool, string, error) {
 func (h *EditingHub) Cleanup() {
 	h.chMu.Lock()
 	defer h.chMu.Unlock()
-	h.clientsMu.Lock()
-	defer h.clientsMu.Unlock()
 
-	// 关闭所有前端连接
+	h.clientsMu.Lock()
+	clients := make([]*WSEditingClient, 0, len(h.clients))
 	for client := range h.clients {
+		clients = append(clients, client)
+	}
+	h.clients = make(map[*WSEditingClient]struct{})
+	h.clientsMu.Unlock()
+
+	for _, client := range clients {
 		client.Close()
 	}
-	// 清理session连接
+
 	if h.sessionConn != nil {
 		h.sessionConn.Close()
 	}
@@ -119,7 +124,6 @@ func (h *EditingHub) Cleanup() {
 	} else {
 		slog.Info("Cleaned up session files", "fileid", h.id)
 	}
-
 }
 
 func (h *EditingHub) IsEmpty() bool {
