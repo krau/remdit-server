@@ -59,6 +59,18 @@ func (h *EditingHub) BroadcastMessage(msg []byte) {
 	h.chMu.Unlock()
 	for _, c := range clients {
 		go func(client *WSEditingClient) {
+			// Use defer/recover to handle potential panic from sending to closed channel
+			defer func() {
+				if r := recover(); r != nil {
+					// Channel was closed, client is no longer valid
+					slog.Debug("Recovered from send to closed channel", "client", client.conn.RemoteAddr())
+				}
+			}()
+			
+			// Check if client is closed before attempting to send
+			if client.IsClosed() {
+				return
+			}
 			select {
 			case client.send <- msg:
 			default:
