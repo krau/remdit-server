@@ -9,10 +9,12 @@ import (
 
 // 前端ws连接客户端
 type WSEditingClient struct {
-	conn *websocket.Conn
-	send chan []byte
-	hub  *EditingHub
-	once sync.Once
+	conn   *websocket.Conn
+	send   chan []byte
+	hub    *EditingHub
+	once   sync.Once
+	mu     sync.RWMutex
+	closed bool
 }
 
 func NewWSEditingClient(conn *websocket.Conn, hub *EditingHub) *WSEditingClient {
@@ -36,8 +38,17 @@ func (c *WSEditingClient) writePump() {
 
 func (c *WSEditingClient) Close() {
 	c.once.Do(func() {
+		c.mu.Lock()
+		c.closed = true
+		c.mu.Unlock()
 		close(c.send)
 		c.conn.Close()
 		c.hub.RemoveClientConn(c)
 	})
+}
+
+func (c *WSEditingClient) IsClosed() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.closed
 }
