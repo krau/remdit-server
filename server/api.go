@@ -26,7 +26,6 @@ var (
 	hubManager = NewHubManager()
 )
 
-
 func Serve(ctx context.Context) {
 	app := fiber.New(fiber.Config{
 		JSONEncoder:             sonic.Marshal,
@@ -49,10 +48,7 @@ func Serve(ctx context.Context) {
 	if config.C.APIKeyAuth && len(config.C.APIKeys) > 0 {
 		rg.Use(keyauth.New(keyauth.Config{
 			Next: func(c *fiber.Ctx) bool {
-				if c.Path() == "/api/session" {
-					return false
-				}
-				return true
+				return c.Path() != "/api/session"
 			},
 			KeyLookup: "header:X-API-Key",
 			Validator: func(c *fiber.Ctx, s string) (bool, error) {

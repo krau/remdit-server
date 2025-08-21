@@ -51,9 +51,67 @@ func handleRoomWSConn(conn *websocket.Conn) {
 		conn.Close()
 		return
 	}
-
 	client := hub.AddClientConn(conn)
 	defer client.Close()
+
+	var pingFailureCount int
+	var lastPongTime = time.Now()
+
+	conn.SetReadDeadline(time.Now().Add(config.WSReadTimeout))
+	conn.SetPongHandler(func(appData string) error {
+		lastPongTime = time.Now()
+		pingFailureCount = 0
+		conn.SetReadDeadline(time.Now().Add(config.WSReadTimeout))
+		slog.Debug("Received pong from room client", "room", room)
+		return nil
+	})
+
+	ticker := time.NewTicker(config.WSPingInterval)
+	defer ticker.Stop()
+
+	go func() {
+		for range ticker.C {
+			if pingFailureCount >= config.WSMaxPingFailures {
+				slog.Warn("Max ping failures reached for room client, closing connection",
+					"room", room, "failures", pingFailureCount)
+				conn.Close()
+				return
+			}
+
+			if time.Since(lastPongTime) > config.WSReadTimeout {
+				pingFailureCount++
+				slog.Warn("No pong received from room client for too long",
+					"room", room,
+					"lastPong", time.Since(lastPongTime),
+					"failures", pingFailureCount)
+
+				if pingFailureCount >= config.WSMaxPingFailures {
+					slog.Error("Room client connection seems dead, closing", "room", room)
+					conn.Close()
+					return
+				}
+				continue
+			}
+
+			if err := conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(config.WSWriteTimeout)); err != nil {
+				pingFailureCount++
+				slog.Warn("Failed to send ping to room client",
+					"room", room,
+					"err", err,
+					"failures", pingFailureCount,
+					"maxFailures", config.WSMaxPingFailures)
+
+				if pingFailureCount >= config.WSMaxPingFailures {
+					slog.Error("Max ping failures reached for room client, closing connection",
+						"room", room, "err", err)
+					conn.Close()
+					return
+				}
+			} else {
+				slog.Debug("Ping sent successfully to room client", "room", room)
+			}
+		}
+	}()
 
 	for {
 		mt, msg, err := conn.ReadMessage()
@@ -212,20 +270,61 @@ func handleSessionWSConn(conn *websocket.Conn) {
 		slog.Info("Session WebSocket disconnected and cleaned up", "sessionid", sessionID)
 	}()
 
-	conn.SetReadDeadline(time.Now().Add(50 * time.Second))
+	var pingFailureCount int
+	var lastPongTime = time.Now()
+
+	conn.SetReadDeadline(time.Now().Add(config.WSReadTimeout))
 	conn.SetPongHandler(func(appData string) error {
-		conn.SetReadDeadline(time.Now().Add(50 * time.Second))
+		lastPongTime = time.Now()
+		pingFailureCount = 0
+		conn.SetReadDeadline(time.Now().Add(config.WSReadTimeout))
+		slog.Debug("Received pong from client", "sessionid", sessionID)
 		return nil
 	})
-	ticker := time.NewTicker(25 * time.Second)
+
+	ticker := time.NewTicker(config.WSPingInterval)
 	defer ticker.Stop()
 
 	go func() {
 		for range ticker.C {
-			if err := conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(10*time.Second)); err != nil {
-				slog.Error("Failed to send ping", "sessionid", sessionID, "err", err)
+			if pingFailureCount >= config.WSMaxPingFailures {
+				slog.Warn("Max ping failures reached, closing connection",
+					"sessionid", sessionID, "failures", pingFailureCount)
 				conn.Close()
 				return
+			}
+
+			if time.Since(lastPongTime) > config.WSReadTimeout {
+				pingFailureCount++
+				slog.Warn("No pong received for too long",
+					"sessionid", sessionID,
+					"lastPong", time.Since(lastPongTime),
+					"failures", pingFailureCount)
+
+				if pingFailureCount >= config.WSMaxPingFailures {
+					slog.Error("Connection seems dead, closing", "sessionid", sessionID)
+					conn.Close()
+					return
+				}
+				continue
+			}
+
+			if err := conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(config.WSWriteTimeout)); err != nil {
+				pingFailureCount++
+				slog.Warn("Failed to send ping",
+					"sessionid", sessionID,
+					"err", err,
+					"failures", pingFailureCount,
+					"maxFailures", config.WSMaxPingFailures)
+
+				if pingFailureCount >= config.WSMaxPingFailures {
+					slog.Error("Max ping failures reached, closing connection",
+						"sessionid", sessionID, "err", err)
+					conn.Close()
+					return
+				}
+			} else {
+				slog.Debug("Ping sent successfully", "sessionid", sessionID)
 			}
 		}
 	}()
